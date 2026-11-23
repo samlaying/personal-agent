@@ -1,8 +1,16 @@
 # PersonalAgent
 
+[![test](https://github.com/samlaying/personal-agent/actions/workflows/test.yml/badge.svg)](https://github.com/samlaying/personal-agent/actions/workflows/test.yml)
+
 一个原生 macOS 个人 Agent 应用：菜单栏常驻、⌥Space 全局唤出、流式对话、工具调用（带人工审批）、SQLite 长期记忆。没有 Electron、没有 WebView、没有第三方依赖。
 
+<img src="docs/screenshot.png" width="440" alt="对话面板截图">
+
 ## 快速开始
+
+直接下载：[Releases](https://github.com/samlaying/personal-agent/releases) 里的 `PersonalAgent-*.zip`（Apple Silicon，ad-hoc 签名，首次打开需右键 →「打开」）。
+
+或者从源码跑：
 
 ```bash
 # 编译 + 打包 .app（首次约 1 分钟）
