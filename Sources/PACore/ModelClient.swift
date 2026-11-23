@@ -156,16 +156,37 @@ public protocol ModelClient: Sendable {
     func stream(_ request: ChatRequest) -> AsyncThrowingStream<StreamEvent, Error>
 }
 
+public struct TrimResult: Sendable, Hashable {
+    /// Oldest-first messages that fit the budget and form a valid transcript head.
+    public var messages: [ChatMessage]
+    /// Everything left out, in chronological order. Candidates for summarization.
+    public var dropped: [ChatMessage]
+
+    public init(messages: [ChatMessage], dropped: [ChatMessage]) {
+        self.messages = messages
+        self.dropped = dropped
+    }
+}
+
 /// Keeps the newest messages within a character budget, then repairs the head so the
 /// transcript never opens with a tool result whose request was cut off.
 public enum TranscriptBuilder {
     public static func trim(_ history: [ChatMessage], budgetChars: Int) -> [ChatMessage] {
+        split(history, budgetChars: budgetChars).messages
+    }
+
+    /// Like `trim`, but also reports what did not fit, so it can be summarized instead of lost.
+    public static func split(_ history: [ChatMessage], budgetChars: Int) -> TrimResult {
+        guard !history.isEmpty else {
+            return TrimResult(messages: [], dropped: [])
+        }
+
         var kept: [ChatMessage] = []
         var used = 0
-
-        for message in history.reversed() {
-            let size = message.content.count + message.toolCalls.reduce(0) { $0 + $1.arguments.count } + 32
-            if !kept.isEmpty && used + size > budgetChars {
+        for index in stride(from: history.count - 1, through: 0, by: -1) {
+            let message = history[index]
+            let size = size(of: message)
+            if !kept.isEmpty, used + size > budgetChars {
                 break
             }
             kept.append(message)
@@ -193,6 +214,12 @@ public enum TranscriptBuilder {
             break
         }
 
-        return kept.reversed()
+        let keptIDs = Set(kept.map(\.id))
+        let dropped = history.filter { !keptIDs.contains($0.id) }
+        return TrimResult(messages: kept.reversed(), dropped: dropped)
+    }
+
+    static func size(of message: ChatMessage) -> Int {
+        message.content.count + message.toolCalls.reduce(0) { $0 + $1.arguments.count } + 32
     }
 }

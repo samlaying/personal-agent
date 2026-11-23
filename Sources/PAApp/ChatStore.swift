@@ -57,6 +57,8 @@ final class ChatStore: ObservableObject {
     let store: MemoryStore
     private var runTask: Task<Void, Never>?
     private var activeToolName: String?
+    /// Gist of turns already compressed out of this session's transcript.
+    private var currentSummary: ConversationSummary?
 
     init() {
         let preferred = Self.defaultDirectory()
@@ -88,6 +90,7 @@ final class ChatStore: ObservableObject {
         session = nil
         items = []
         preApprovedTools = []
+        currentSummary = nil
         Task {
             do {
                 session = try await store.createSession(principalID: agent.id)
@@ -104,6 +107,7 @@ final class ChatStore: ObservableObject {
             if let latest = try await store.listSessions(limit: 1).first {
                 session = latest
                 items = Self.displayItems(for: try await store.messages(in: latest.id))
+                currentSummary = try await store.summary(for: latest.id)
             } else {
                 session = try await store.createSession(principalID: agent.id)
             }
@@ -118,6 +122,7 @@ final class ChatStore: ObservableObject {
             session = target
             items = Self.displayItems(for: try await store.messages(in: target.id))
             preApprovedTools = []
+            currentSummary = try await store.summary(for: target.id)
         } catch {
             lastError = "打开会话失败：\(error.localizedDescription)"
         }
@@ -187,7 +192,8 @@ final class ChatStore: ObservableObject {
                 history: Array(history),
                 input: text,
                 sessionID: sessionID,
-                preApprovedTools: self.preApprovedTools
+                preApprovedTools: self.preApprovedTools,
+                summary: self.currentSummary
             )
 
             for await event in runner.events(for: request) {
@@ -305,6 +311,15 @@ final class ChatStore: ObservableObject {
 
         case .toolMessage(let message):
             persist(message)
+
+        case .summaryUpdated(let summary):
+            currentSummary = summary
+            note = "已把较早的对话压缩成摘要"
+            if let sessionID = session?.id {
+                Task { [store] in
+                    try? await store.saveSummary(summary, for: sessionID)
+                }
+            }
 
         case .approvalRequired(let request):
             pendingApproval = request

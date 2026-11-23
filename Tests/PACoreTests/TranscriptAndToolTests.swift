@@ -63,6 +63,41 @@ struct TranscriptBuilderTests {
     @Test func emptyInput() {
         #expect(TranscriptBuilder.trim([], budgetChars: 10).isEmpty)
     }
+
+    @Test func splitReportsWhatWasDropped() {
+        let history = [
+            message(.user, content: String(repeating: "a", count: 50)),
+            message(.assistant, content: String(repeating: "b", count: 50)),
+            message(.user, content: String(repeating: "c", count: 10)),
+        ]
+        let result = TranscriptBuilder.split(history, budgetChars: 130)
+        #expect(result.messages.map(\.content) == [String(repeating: "b", count: 50), String(repeating: "c", count: 10)])
+        #expect(result.dropped.count == 1)
+        #expect(result.dropped[0].content == String(repeating: "a", count: 50))
+    }
+
+    @Test func splitCountsHeadRepairsAsDropped() {
+        let history = [
+            message(.user, content: String(repeating: "a", count: 50)),
+            message(.assistant, content: "", toolCalls: [ToolCall(id: "1", name: "t", arguments: String(repeating: "x", count: 60))]),
+            message(.tool, content: "result", toolCallID: "1"),
+        ]
+        let result = TranscriptBuilder.split(history, budgetChars: 70)
+        #expect(result.messages.isEmpty)
+        #expect(result.dropped.count == 3)
+    }
+
+    @Test func keptAndDroppedAreDisjointAndComplete() {
+        let history = (1...9).map { index in
+            message(index.isMultiple(of: 2) ? .assistant : .user, content: String(repeating: "x", count: index * 20))
+        }
+        let result = TranscriptBuilder.split(history, budgetChars: 400)
+        let keptIDs = Set(result.messages.map(\.id))
+        let droppedIDs = Set(result.dropped.map(\.id))
+        #expect(keptIDs.isDisjoint(with: droppedIDs))
+        #expect(keptIDs.union(droppedIDs).count == history.count)
+        #expect(!result.dropped.isEmpty)
+    }
 }
 
 struct JSONValueTests {

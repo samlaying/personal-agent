@@ -148,6 +148,19 @@ public struct ChatSession: Hashable, Sendable, Codable, Identifiable {
     }
 }
 
+/// A compressed stand-in for the oldest part of a conversation, so trimming can keep
+/// the gist instead of silently forgetting old turns.
+public struct ConversationSummary: Codable, Sendable, Hashable {
+    public var text: String
+    /// Messages with `seq <= throughSeq` are already folded into `text`.
+    public var throughSeq: Int
+
+    public init(text: String, throughSeq: Int) {
+        self.text = text
+        self.throughSeq = throughSeq
+    }
+}
+
 /// One configurable agent: its identity, instructions and tool set. A team is composed
 /// from several of these, so an agent is the unit everything else builds on.
 public struct AgentProfile: Hashable, Sendable, Codable, Identifiable {

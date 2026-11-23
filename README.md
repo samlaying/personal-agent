@@ -64,7 +64,24 @@ Sources/
 
 - **AgentRunner 无状态**，每次 run 独立；`history`/`input`/`profile` 全部入参。这是多 Agent 的扩展点。
 - **协议宽容解析**：content 支持字符串/分段数组、arguments 支持字符串/对象、reasoning 支持 `reasoning_content`/`reasoning` 双字段。
-- **上下文预算**：transcript 超长时从最新往前保留，并修复被截断的 tool 请求/结果对（成对保留或成对丢弃），不会发出孤儿 tool 消息。
+- **上下文预算**：transcript 超出预算时，先把要丢的部分压缩成摘要（`ContextSummarizer`），摘要按会话持久化复用，再按需截断；并修复被截断的 tool 请求/结果对，不会发出孤儿 tool 消息。
+
+## 上下文是怎么拼的
+
+每轮请求即时重建：
+
+```
+system: 你是{name}… + instructions + 环境/时间 + 关于用户(USER.md)
+        + 你的笔记(MEMORY.md) + 更早的对话(摘要) + 工作方式 + 可用工具
+user/assistant/tool: 会话历史（按预算裁剪）
+user:   本轮输入
+tools:  工具 Schema（tool_choice=auto）
+```
+
+- 历史来自 SQLite，去掉刚落库的本轮 user 消息（`input` 会重新加）
+- 裁剪从最新往回累加到 `transcriptBudgetChars`（默认 60k 字符）
+- 溢出时先调 `ContextSummarizer` 把被丢的旧消息压成要点（保留事实、决定、偏好、未完成任务、关键路径），写入会话的 `summary`/`summary_through_seq`，下次直接复用、不重复付费
+- 摘要失败则退回直接截断，并在界面提示「上下文压缩失败」
 
 ## 多 Agent 团队（下一步）
 

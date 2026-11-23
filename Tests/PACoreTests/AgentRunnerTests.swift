@@ -68,7 +68,7 @@ struct AgentRunnerTests {
                 request.ticket.resolve(autoApprove ? .allowOnce : .deny)
             case .toolFinished(_, _, let status):
                 outcome.toolOutcomes.append(status)
-            case .toolStarted, .reasoningDelta, .note:
+            case .toolStarted, .reasoningDelta, .note, .summaryUpdated:
                 break
             case .finished(let reason):
                 outcome.finish = reason

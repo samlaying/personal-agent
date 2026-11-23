@@ -232,6 +232,27 @@ public actor MemoryStore {
         try run("DELETE FROM agents WHERE id = ?", [.text(id)])
     }
 
+    // MARK: Conversation summary
+
+    public func summary(for sessionID: String) throws -> ConversationSummary? {
+        let found = try rows(
+            "SELECT summary, summary_through_seq FROM sessions WHERE id = ?",
+            [.text(sessionID)]
+        ) { statement in
+            statement.optionalText(0).map {
+                ConversationSummary(text: $0, throughSeq: statement.int(1))
+            }
+        }
+        return found.first ?? nil
+    }
+
+    public func saveSummary(_ summary: ConversationSummary, for sessionID: String) throws {
+        try run(
+            "UPDATE sessions SET summary = ?, summary_through_seq = ? WHERE id = ?",
+            [.text(summary.text), .int(summary.throughSeq), .text(sessionID)]
+        )
+    }
+
     // MARK: Setup (nonisolated; runs before the handle is stored)
 
     private static func setUp(_ db: OpaquePointer) throws {
@@ -239,7 +260,19 @@ public actor MemoryStore {
         try exec(db, "PRAGMA journal_mode=WAL")
         try exec(db, "PRAGMA foreign_keys=ON")
         try exec(db, schemaSQL)
+        try addSummaryColumnsIfNeeded(db)
         try seed(db)
+    }
+
+    /// Databases created before summaries existed get the columns added in place.
+    private static func addSummaryColumnsIfNeeded(_ db: OpaquePointer) throws {
+        let columns = try query(db, "PRAGMA table_info(sessions)") { $0.text(1) }
+        if !columns.contains("summary") {
+            try exec(db, "ALTER TABLE sessions ADD COLUMN summary TEXT")
+        }
+        if !columns.contains("summary_through_seq") {
+            try exec(db, "ALTER TABLE sessions ADD COLUMN summary_through_seq INTEGER NOT NULL DEFAULT 0")
+        }
     }
 
     private static func seed(_ db: OpaquePointer) throws {
@@ -262,7 +295,9 @@ public actor MemoryStore {
             mode TEXT NOT NULL DEFAULT 'single',
             principal_id TEXT NOT NULL DEFAULT '',
             created_at REAL NOT NULL,
-            updated_at REAL NOT NULL
+            updated_at REAL NOT NULL,
+            summary TEXT,
+            summary_through_seq INTEGER NOT NULL DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS messages (
             id TEXT PRIMARY KEY,
@@ -304,7 +339,13 @@ public actor MemoryStore {
     private func rows<T>(
         _ sql: String, _ values: [Statement.Value?] = [], _ map: (Statement) throws -> T
     ) throws -> [T] {
-        let statement = try Statement(sql, on: db.pointer)
+        try Self.query(db.pointer, sql, values, map)
+    }
+
+    private static func query<T>(
+        _ db: OpaquePointer, _ sql: String, _ values: [Statement.Value?] = [], _ map: (Statement) throws -> T
+    ) throws -> [T] {
+        let statement = try Statement(sql, on: db)
         try statement.bind(values)
         var result: [T] = []
         while try statement.step() {

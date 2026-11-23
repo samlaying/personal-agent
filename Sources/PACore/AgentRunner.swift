@@ -5,11 +5,19 @@ public struct PromptContext: Sendable, Hashable {
     public var userProfile: String
     public var memoryNotes: String
     public var environmentSummary: String
+    /// Gist of turns that have already been compressed out of the transcript.
+    public var earlierSummary: String
 
-    public init(userProfile: String = "", memoryNotes: String = "", environmentSummary: String = "") {
+    public init(
+        userProfile: String = "",
+        memoryNotes: String = "",
+        environmentSummary: String = "",
+        earlierSummary: String = ""
+    ) {
         self.userProfile = userProfile
         self.memoryNotes = memoryNotes
         self.environmentSummary = environmentSummary
+        self.earlierSummary = earlierSummary
     }
 }
 
@@ -21,19 +29,23 @@ public struct RunRequest: Sendable {
     public var sessionID: String
     /// Tools the user has already said "always allow" for in this session.
     public var preApprovedTools: Set<String>
+    /// What earlier turns were compressed into, if the session was summarized before.
+    public var summary: ConversationSummary?
 
     public init(
         profile: AgentProfile,
         history: [ChatMessage],
         input: String,
         sessionID: String,
-        preApprovedTools: Set<String> = []
+        preApprovedTools: Set<String> = [],
+        summary: ConversationSummary? = nil
     ) {
         self.profile = profile
         self.history = history
         self.input = input
         self.sessionID = sessionID
         self.preApprovedTools = preApprovedTools
+        self.summary = summary
     }
 }
 
@@ -125,6 +137,8 @@ public enum AgentEvent: Sendable {
     case toolStarted(callID: String, name: String, arguments: String)
     case toolFinished(callID: String, result: String, outcome: ToolOutcome)
     case toolMessage(ChatMessage)
+    /// The dropped part of the conversation has been compressed; the caller should store it.
+    case summaryUpdated(ConversationSummary)
     case finished(FinishReason)
 }
 
@@ -141,6 +155,7 @@ public struct AgentRunner: Sendable {
     public var temperature: Double?
     public var maxSteps: Int
     public var transcriptBudgetChars: Int
+    public var summarizer = ContextSummarizer()
 
     public init(
         client: any ModelClient,
@@ -180,15 +195,47 @@ public struct AgentRunner: Sendable {
     private func execute(_ request: RunRequest, into out: AsyncStream<AgentEvent>.Continuation) async throws {
         let agentID = request.profile.id
         let approvals = ApprovalMemory(request.preApprovedTools)
-        var transcript = request.history + [ChatMessage(role: .user, author: .user, content: request.input)]
         let model = request.profile.model ?? defaultModel
+
+        var context = prompt
+        var summaryThrough = request.summary?.throughSeq ?? 0
+        if let existing = request.summary?.text, !existing.isEmpty {
+            context.earlierSummary = existing
+        }
+        var pending = request.history.filter { $0.seq > summaryThrough }
+
+        // If what is left does not fit the budget, compress the overflow instead of
+        // dropping it silently. Runs at most once per turn; the summary is handed to the
+        // caller so later turns reuse it instead of paying for it again.
+        let initial = TranscriptBuilder.split(pending, budgetChars: transcriptBudgetChars)
+        if !initial.dropped.isEmpty {
+            do {
+                let merged = try await summarizer.summarize(
+                    existing: context.earlierSummary,
+                    dropped: initial.dropped,
+                    client: client,
+                    model: model
+                )
+                context.earlierSummary = merged
+                let droppedThrough = initial.dropped.map(\.seq).max() ?? summaryThrough
+                summaryThrough = max(summaryThrough, droppedThrough)
+                pending = pending.filter { $0.seq > summaryThrough }
+                out.yield(.summaryUpdated(ConversationSummary(text: merged, throughSeq: summaryThrough)))
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                out.yield(.note("上下文压缩失败，已直接截断更早的消息"))
+            }
+        }
+
+        var transcript = pending + [ChatMessage(role: .user, author: .user, content: request.input)]
 
         for _ in 0..<maxSteps {
             try Task.checkCancellation()
 
             let system = SystemPrompt.make(
                 profile: request.profile,
-                context: prompt,
+                context: context,
                 toolNames: tools.names,
                 now: Date()
             )
@@ -368,6 +415,9 @@ public enum SystemPrompt {
         }
         if !context.memoryNotes.isEmpty {
             sections.append("## 你的笔记\n\(context.memoryNotes)")
+        }
+        if !context.earlierSummary.isEmpty {
+            sections.append("## 更早的对话（摘要）\n\(context.earlierSummary)")
         }
         sections.append(rules)
         sections.append("## 可用工具\n\(toolNames.joined(separator: "、"))")

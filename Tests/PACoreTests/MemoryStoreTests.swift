@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import SQLite3
 @testable import PACore
 
 struct MemoryStoreTests {
@@ -69,8 +70,7 @@ struct MemoryStoreTests {
         #expect(try await store.searchHistory("删除的内容").isEmpty)
     }
 
-    @Test func defaultAgentIsSeededAndAgentsRoundTrip() async throws {
-        let (store, _) = try Self.makeStore()
+    @Test func defaultAgentIsSeededAndAgentsRoundTrip() async throws {        let (store, _) = try Self.makeStore()
 
         let seeded = try await store.agents()
         #expect(seeded.count == 1)
@@ -124,5 +124,81 @@ struct MemoryFilesTests {
         #expect(snippet.contains("用户喜欢喝拿铁"))
         #expect(!snippet.contains("<!--"))
         #expect(!snippet.contains("#"))
+    }
+}
+
+struct ConversationSummaryStoreTests {
+    private static func makeStore(at url: URL) throws -> MemoryStore {
+        try MemoryStore(url: url)
+    }
+
+    @Test func summaryRoundTrip() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pa-summary-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try Self.makeStore(at: directory.appendingPathComponent("m.sqlite"))
+
+        let session = try await store.createSession(principalID: "assistant")
+        #expect(try await store.summary(for: session.id) == nil)
+
+        try await store.saveSummary(ConversationSummary(text: "第一条摘要", throughSeq: 4), for: session.id)
+        let first = try await store.summary(for: session.id)
+        #expect(first?.text == "第一条摘要")
+        #expect(first?.throughSeq == 4)
+
+        try await store.saveSummary(ConversationSummary(text: "第二条摘要", throughSeq: 9), for: session.id)
+        let second = try await store.summary(for: session.id)
+        #expect(second?.text == "第二条摘要")
+        #expect(second?.throughSeq == 9)
+    }
+
+    /// A database created before summaries existed must gain the columns in place.
+    @Test func legacyDatabaseIsMigrated() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pa-legacy-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("m.sqlite")
+
+        var handle: OpaquePointer?
+        #expect(sqlite3_open(url.path, &handle) == SQLITE_OK)
+        let legacy = """
+            CREATE TABLE sessions (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL DEFAULT '',
+                mode TEXT NOT NULL DEFAULT 'single',
+                principal_id TEXT NOT NULL DEFAULT '',
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            );
+            CREATE TABLE messages (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                seq INTEGER NOT NULL,
+                role TEXT NOT NULL,
+                author TEXT NOT NULL,
+                content TEXT NOT NULL DEFAULT '',
+                tool_calls TEXT,
+                tool_call_id TEXT,
+                name TEXT,
+                created_at REAL NOT NULL
+            );
+            CREATE TABLE agents (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                instructions TEXT NOT NULL DEFAULT '',
+                model TEXT,
+                created_at REAL NOT NULL
+            );
+            """
+        #expect(sqlite3_exec(handle, legacy, nil, nil, nil) == SQLITE_OK)
+        sqlite3_close(handle)
+
+        let store = try Self.makeStore(at: url)
+        let session = try await store.createSession(principalID: "assistant")
+        try await store.saveSummary(ConversationSummary(text: "迁移后的摘要", throughSeq: 2), for: session.id)
+        let loaded = try await store.summary(for: session.id)
+        #expect(loaded?.text == "迁移后的摘要")
+        #expect(loaded?.throughSeq == 2)
     }
 }
