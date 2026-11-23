@@ -3,6 +3,14 @@ import Carbon
 import PACore
 import SwiftUI
 
+/// A panel whose yellow button hides it instead of minimizing it. The app has no Dock
+/// icon, so a minimized window would be stranded in the Dock's corner with no way back.
+final class FloatingPanel: NSPanel {
+    override func miniaturize(_ sender: Any?) {
+        orderOut(nil)
+    }
+}
+
 /// The always-available chat window: a floating panel toggled by the global hotkey
 /// (and by the menu bar item). Escape hides it.
 @MainActor
@@ -30,7 +38,7 @@ final class ChatPanelController {
 
         // A standard titled panel: the traffic lights (close / minimize / zoom) sit in the
         // native title bar, so content starts below them.
-        let panel = NSPanel(
+        let panel = FloatingPanel(
             contentRect: frame,
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
@@ -76,8 +84,9 @@ final class ChatPanelController {
 
     func toggle() {
         guard let panel else { return }
-        log("toggle visible=\(panel.isVisible) key=\(NSApp.keyWindow === panel)")
-        if panel.isVisible, NSApp.keyWindow === panel {
+        // Visibility alone decides: key-window state is racy right after a status item
+        // click, which made the click after showing a no-op.
+        if panel.isVisible {
             panel.orderOut(nil)
         } else {
             show()
@@ -85,24 +94,12 @@ final class ChatPanelController {
     }
 
     func show() {
-        guard let panel else {
-            log("show: no panel")
-            return
-        }
+        guard let panel else { return }
         NSApp.activate(ignoringOtherApps: true)
-        panel.makeKeyAndOrderFront(nil)
-        log("show: visible=\(panel.isVisible) frame=\(panel.frame) screen=\(String(describing: panel.screen?.visibleFrame))")
-    }
-
-    /// Temporary diagnostics: append panel state to /tmp/pa-panel.log.
-    private func log(_ text: String) {
-        let line = "\(Date().formatted(date: .omitted, time: .standard)) \(text)\n"
-        if let handle = FileHandle(forWritingAtPath: "/tmp/pa-panel.log") {
-            handle.seekToEndOfFile()
-            try? handle.write(contentsOf: Data(line.utf8))
-            try? handle.close()
-        } else {
-            try? Data(line.utf8).write(to: URL(fileURLWithPath: "/tmp/pa-panel.log"))
+        // A panel left minimized has to come back out too, or it stays orphaned.
+        if panel.isMiniaturized {
+            panel.deminiaturize(nil)
         }
+        panel.makeKeyAndOrderFront(nil)
     }
 }

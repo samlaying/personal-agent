@@ -63,7 +63,7 @@ Sources/
     KeychainStore            # 密钥存登录钥匙串
   PAMock/                    # 本地 OpenAI 兼容模拟服务（纯 socket，测试/联调用）
   PAApp/                     # SwiftUI 应用
-    MenuBarExtra + NSPanel   # 菜单栏常驻 + ⌥Space 浮动面板
+    NSStatusItem + NSPanel   # 菜单栏常驻 + ⌥Space 浮动面板
     ChatStore                # 会话状态机、事件消费、持久化
     AppSettings/AgentDirectory
 ```
