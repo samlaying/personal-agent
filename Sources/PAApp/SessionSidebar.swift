@@ -62,14 +62,17 @@ struct SessionSidebar: View {
 
     @ViewBuilder
     private var sessionRows: some View {
-        if store.sessionList.isEmpty {
+        let visible = store.sessionList.filter {
+            !$0.title.trimmingCharacters(in: .whitespaces).isEmpty || $0.id == store.session?.id
+        }
+        if visible.isEmpty {
             Text("还没有对话")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .center)
                 .padding(.top, 20)
         }
-        ForEach(store.sessionList) { session in
+        ForEach(visible) { session in
             Button {
                 Task { await store.open(session) }
             } label: {

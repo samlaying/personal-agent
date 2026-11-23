@@ -94,6 +94,10 @@ final class ChatStore: ObservableObject {
 
     func newSession(agent: AgentProfile) {
         cancel()
+        // Reuse an untouched session instead of leaving a trail of empty ones.
+        if session != nil, items.isEmpty {
+            return
+        }
         session = nil
         items = []
         preApprovedTools = []

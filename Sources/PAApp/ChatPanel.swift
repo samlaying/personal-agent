@@ -28,9 +28,11 @@ final class ChatPanelController {
         // Wide enough for the session sidebar plus the conversation column.
         let frame = NSRect(x: 0, y: 0, width: 800, height: 680)
 
+        // A standard titled panel: the traffic lights (close / minimize / zoom) sit in the
+        // native title bar, so content starts below them.
         let panel = NSPanel(
             contentRect: frame,
-            styleMask: [.titled, .closable, .resizable, .fullSizeContentView],
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
@@ -43,10 +45,6 @@ final class ChatPanelController {
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
         panel.minSize = NSSize(width: 620, height: 480)
-        // The header carries the actions; the system traffic lights would only add noise.
-        panel.standardWindowButton(.closeButton)?.isHidden = true
-        panel.standardWindowButton(.miniaturizeButton)?.isHidden = true
-        panel.standardWindowButton(.zoomButton)?.isHidden = true
         panel.contentView = content
         panel.setFrameAutosaveName("pa-chat-panel-v3")
         panel.center()
