@@ -102,3 +102,7 @@ tools:  工具 Schema（tool_choice=auto）
 - reasoning 展示但不持久化（重开会话后不可见）
 - 面板固定浮在最前（未做「仅当前空间」选项）
 - 分发需自行 Developer ID 签名 + 公证（当前脚本为 ad-hoc 签名，仅本机可用）
+
+## 许可证
+
+MIT，见 [LICENSE](LICENSE)。
