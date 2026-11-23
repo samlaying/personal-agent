@@ -36,34 +36,3 @@ final class SettingsWindowController {
         window?.close()
     }
 }
-
-@MainActor
-final class HistoryWindowController {
-    static let shared = HistoryWindowController()
-    private var window: NSWindow?
-
-    func show() {
-        if window == nil {
-            let root = HistoryView()
-                .environmentObject(ChatStore.shared)
-                .environmentObject(AgentDirectory.shared)
-            let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 460, height: 560),
-                styleMask: [.titled, .closable, .resizable],
-                backing: .buffered,
-                defer: false
-            )
-            window.title = "历史记录"
-            window.contentView = NSHostingView(rootView: root)
-            window.isReleasedWhenClosed = false
-            window.center()
-            self.window = window
-        }
-        NSApp.activate(ignoringOtherApps: true)
-        window?.makeKeyAndOrderFront(nil)
-    }
-
-    func close() {
-        window?.close()
-    }
-}

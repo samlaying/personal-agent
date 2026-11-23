@@ -44,6 +44,9 @@ final class ChatStore: ObservableObject {
     @Published private(set) var lastError: String?
     @Published private(set) var note: String?
     @Published private(set) var preApprovedTools: Set<String> = []
+    @Published private(set) var sessionList: [ChatSession] = []
+    /// The session list lives in a sidebar of the chat window, not a separate screen.
+    @Published var showSidebar = true
 
     func report(_ text: String?) {
         lastError = text
@@ -85,6 +88,10 @@ final class ChatStore: ObservableObject {
 
     // MARK: Session management
 
+    func reloadSessions() async {
+        sessionList = (try? await store.listSessions(limit: 100)) ?? []
+    }
+
     func newSession(agent: AgentProfile) {
         cancel()
         session = nil
@@ -94,6 +101,7 @@ final class ChatStore: ObservableObject {
         Task {
             do {
                 session = try await store.createSession(principalID: agent.id)
+                await reloadSessions()
             } catch {
                 lastError = "新建会话失败：\(error.localizedDescription)"
             }
@@ -111,6 +119,7 @@ final class ChatStore: ObservableObject {
             } else {
                 session = try await store.createSession(principalID: agent.id)
             }
+            await reloadSessions()
         } catch {
             lastError = "读取会话失败：\(error.localizedDescription)"
         }
@@ -136,6 +145,7 @@ final class ChatStore: ObservableObject {
                 if target.id == session?.id {
                     newSession(agent: agent)
                 }
+                await reloadSessions()
             } catch {
                 lastError = "删除会话失败：\(error.localizedDescription)"
             }
@@ -181,6 +191,7 @@ final class ChatStore: ObservableObject {
                     let title = String(text.prefix(30))
                     try? await self.store.renameSession(sessionID, title: title)
                     self.session?.title = title
+                    await self.reloadSessions()
                 }
             } catch {
                 self.lastError = "保存消息失败：\(error.localizedDescription)"
@@ -203,6 +214,7 @@ final class ChatStore: ObservableObject {
             self.phase = .idle
             self.note = nil
             self.runTask = nil
+            await self.reloadSessions()
         }
     }
 

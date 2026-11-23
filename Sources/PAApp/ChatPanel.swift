@@ -25,7 +25,8 @@ final class ChatPanelController {
             .environmentObject(AgentDirectory.shared)
 
         let content = NSHostingView(rootView: chat)
-        let frame = NSRect(x: 0, y: 0, width: 540, height: 640)
+        // Wide enough for the session sidebar plus the conversation column.
+        let frame = NSRect(x: 0, y: 0, width: 800, height: 680)
 
         let panel = NSPanel(
             contentRect: frame,
@@ -41,13 +42,13 @@ final class ChatPanelController {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
-        panel.minSize = NSSize(width: 400, height: 480)
+        panel.minSize = NSSize(width: 620, height: 480)
         // The header carries the actions; the system traffic lights would only add noise.
         panel.standardWindowButton(.closeButton)?.isHidden = true
         panel.standardWindowButton(.miniaturizeButton)?.isHidden = true
         panel.standardWindowButton(.zoomButton)?.isHidden = true
         panel.contentView = content
-        panel.setFrameAutosaveName("pa-chat-panel-v2")
+        panel.setFrameAutosaveName("pa-chat-panel-v3")
         panel.center()
         self.panel = panel
 

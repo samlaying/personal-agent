@@ -26,8 +26,9 @@ struct MenuBarView: View {
                 ChatPanelController.shared.show()
             }
             Divider()
-            Button("历史记录…") {
-                HistoryWindowController.shared.show()
+            Button("显示/隐藏对话列表") {
+                ChatStore.shared.showSidebar.toggle()
+                ChatPanelController.shared.show()
             }
             Button("设置…") {
                 SettingsWindowController.shared.show()

@@ -9,11 +9,12 @@ struct ChatView: View {
     @FocusState private var inputFocused: Bool
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            Divider()
-            transcript
-            bottomArea
+        HStack(spacing: 0) {
+            if store.showSidebar {
+                SessionSidebar()
+                Divider()
+            }
+            chatColumn
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .onAppear {
@@ -25,10 +26,25 @@ struct ChatView: View {
         }
     }
 
+    private var chatColumn: some View {
+        VStack(spacing: 0) {
+            header
+            Divider()
+            transcript
+            bottomArea
+        }
+    }
+
     // MARK: Header
 
     private var header: some View {
         HStack(spacing: 10) {
+            iconButton(store.showSidebar ? "sidebar.left" : "sidebar.leading", help: "对话列表") {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    store.showSidebar.toggle()
+                }
+            }
+
             Menu {
                 ForEach(directory.agents) { agent in
                     Button {
@@ -70,18 +86,15 @@ struct ChatView: View {
 
             Spacer(minLength: 4)
 
-            iconButton("plus", help: "新对话") {
+            iconButton("square.and.pencil", help: "新对话") {
                 store.newSession(agent: directory.current)
                 inputFocused = true
-            }
-            iconButton("clock.arrow.circlepath", help: "历史记录") {
-                HistoryWindowController.shared.show()
             }
             iconButton("gearshape", help: "设置") {
                 SettingsWindowController.shared.show()
             }
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 12)
         .padding(.vertical, 10)
         .background(.bar)
     }
