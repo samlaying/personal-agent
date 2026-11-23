@@ -1,0 +1,69 @@
+import AppKit
+import PACore
+import SwiftUI
+
+/// Settings and history live in their own AppKit windows so any view (including the
+/// AppKit-hosted chat panel) can open them, which SwiftUI's `openWindow` cannot do
+/// from outside a scene.
+
+@MainActor
+final class SettingsWindowController {
+    static let shared = SettingsWindowController()
+    private var window: NSWindow?
+
+    func show() {
+        if window == nil {
+            let root = SettingsView()
+                .environmentObject(AppSettings.shared)
+                .environmentObject(AgentDirectory.shared)
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 540, height: 640),
+                styleMask: [.titled, .closable, .resizable],
+                backing: .buffered,
+                defer: false
+            )
+            window.title = "设置"
+            window.contentView = NSHostingView(rootView: root)
+            window.isReleasedWhenClosed = false
+            window.center()
+            self.window = window
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        window?.makeKeyAndOrderFront(nil)
+    }
+
+    func close() {
+        window?.close()
+    }
+}
+
+@MainActor
+final class HistoryWindowController {
+    static let shared = HistoryWindowController()
+    private var window: NSWindow?
+
+    func show() {
+        if window == nil {
+            let root = HistoryView()
+                .environmentObject(ChatStore.shared)
+                .environmentObject(AgentDirectory.shared)
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 460, height: 560),
+                styleMask: [.titled, .closable, .resizable],
+                backing: .buffered,
+                defer: false
+            )
+            window.title = "历史记录"
+            window.contentView = NSHostingView(rootView: root)
+            window.isReleasedWhenClosed = false
+            window.center()
+            self.window = window
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        window?.makeKeyAndOrderFront(nil)
+    }
+
+    func close() {
+        window?.close()
+    }
+}
