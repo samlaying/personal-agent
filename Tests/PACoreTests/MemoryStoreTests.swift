@@ -39,6 +39,42 @@ struct MemoryStoreTests {
         #expect(sessions[0].displayTitle == "测试会话")
     }
 
+    @Test func recentMessagesPagesBackwards() async throws {
+        let (store, _) = try Self.makeStore()
+        let session = try await store.createSession(principalID: "assistant")
+        for index in 0..<450 {
+            try await store.append(
+                ChatMessage(seq: index, role: .user, author: .user, content: "消息 \(index)"),
+                to: session.id
+            )
+        }
+
+        let last = try await store.recentMessages(in: session.id, limit: 200)
+        #expect(last.count == 200)
+        #expect(last.first?.seq == 250)      // oldest of the page
+        #expect(last.last?.seq == 449)       // newest overall
+        #expect(last.map(\.seq) == (250...449).map { $0 })   // still ascending
+
+        let earlier = try await store.recentMessages(in: session.id, limit: 200, beforeSeq: 250)
+        #expect(earlier.count == 200)
+        #expect(earlier.first?.seq == 50)
+        #expect(earlier.last?.seq == 249)
+
+        let oldest = try await store.recentMessages(in: session.id, limit: 200, beforeSeq: 50)
+        #expect(oldest.count == 50)          // 0...49
+        #expect(oldest.first?.seq == 0)
+    }
+
+    @Test func maxSeqReportsTheHighWaterMark() async throws {
+        let (store, _) = try Self.makeStore()
+        let session = try await store.createSession(principalID: "assistant")
+        #expect(try await store.maxSeq(in: session.id) == -1)
+        for index in 0..<5 {
+            try await store.append(ChatMessage(seq: index, role: .user, author: .user, content: "m"), to: session.id)
+        }
+        #expect(try await store.maxSeq(in: session.id) == 4)
+    }
+
     @Test func chineseFullTextSearch() async throws {
         let (store, _) = try Self.makeStore()
         let session = try await store.createSession(principalID: "assistant", title: "搜索会话")

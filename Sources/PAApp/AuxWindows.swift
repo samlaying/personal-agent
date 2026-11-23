@@ -14,8 +14,8 @@ final class SettingsWindowController {
     func show() {
         if window == nil {
             let root = SettingsView()
-                .environmentObject(AppSettings.shared)
-                .environmentObject(AgentDirectory.shared)
+                .environment(AppSettings.shared)
+                .environment(AgentDirectory.shared)
             let window = NSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 540, height: 640),
                 styleMask: [.titled, .closable, .resizable],

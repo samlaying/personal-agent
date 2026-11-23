@@ -6,11 +6,12 @@ import PACore
 /// picks `current`; a future team mode composes several profiles behind one session,
 /// which is why profiles already carry per-agent identity and instructions.
 @MainActor
-final class AgentDirectory: ObservableObject {
+@Observable
+final class AgentDirectory {
     static let shared = AgentDirectory()
 
-    @Published private(set) var agents: [AgentProfile] = []
-    @Published var currentID: String = AgentProfile.defaultID
+    private(set) var agents: [AgentProfile] = []
+    var currentID: String = AgentProfile.defaultID
 
     private let store: MemoryStore
 

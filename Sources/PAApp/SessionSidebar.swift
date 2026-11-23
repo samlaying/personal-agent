@@ -3,8 +3,8 @@ import SwiftUI
 
 /// Session list and full-text history search, docked to the left of the chat.
 struct SessionSidebar: View {
-    @EnvironmentObject private var store: ChatStore
-    @EnvironmentObject private var directory: AgentDirectory
+    @Environment(ChatStore.self) private var store
+    @Environment(AgentDirectory.self) private var directory
 
     @State private var query = ""
     @State private var hits: [HistoryHit] = []

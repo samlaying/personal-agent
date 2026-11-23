@@ -174,6 +174,43 @@ public actor MemoryStore {
         }
     }
 
+    /// Newest `limit` messages, still returned oldest-first so it can be appended directly.
+    /// `beforeSeq` pages further back. Long sessions are never loaded in full.
+    public func recentMessages(
+        in sessionID: String, limit: Int = 200, beforeSeq: Int? = nil
+    ) throws -> [ChatMessage] {
+        let upper = beforeSeq ?? Int.max
+        let rows = try rows(
+            """
+            SELECT id, seq, role, author, content, tool_calls, tool_call_id, name, created_at
+            FROM messages WHERE session_id = ? AND seq < ? ORDER BY seq DESC LIMIT ?
+            """,
+            [.text(sessionID), .int(upper), .int(limit)]
+        ) { statement in
+            let toolCalls = statement.optionalText(5).flatMap { text in
+                try? decoder.decode([ToolCall].self, from: Data(text.utf8))
+            }
+            return ChatMessage(
+                id: statement.text(0),
+                seq: statement.int(1),
+                role: MessageRole(rawValue: statement.text(2)) ?? .user,
+                author: Author(storageValue: statement.text(3)),
+                content: statement.text(4),
+                toolCalls: toolCalls ?? [],
+                toolCallID: statement.optionalText(6),
+                name: statement.optionalText(7),
+                createdAt: Date(timeIntervalSince1970: statement.double(8))
+            )
+        }
+        return rows.reversed()
+    }
+
+    public func maxSeq(in sessionID: String) throws -> Int {
+        try rows("SELECT COALESCE(MAX(seq), -1) FROM messages WHERE session_id = ?", [.text(sessionID)]) {
+            $0.int(0)
+        }.first ?? -1
+    }
+
     /// Full-text search across every session, best matches first.
     public func searchHistory(_ text: String, limit: Int = 8) throws -> [HistoryHit] {
         guard let match = CJKText.ftsQuery(text) else { return [] }

@@ -2,8 +2,8 @@ import PACore
 import SwiftUI
 
 struct ChatView: View {
-    @EnvironmentObject private var store: ChatStore
-    @EnvironmentObject private var directory: AgentDirectory
+    @Environment(ChatStore.self) private var store
+    @Environment(AgentDirectory.self) private var directory
     @State private var draft = ""
     @State private var expandedTools: Set<String> = []
     @FocusState private var inputFocused: Bool
@@ -125,7 +125,18 @@ struct ChatView: View {
     private var transcript: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
+                // Lazy: a long session must only build the rows that are on screen.
+                LazyVStack(alignment: .leading, spacing: 14) {
+                    if store.hasEarlierMessages {
+                        Button("加载更早的消息") {
+                            Task { await store.loadEarlier() }
+                        }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(.vertical, 4)
+                    }
                     if store.items.isEmpty {
                         emptyState
                     }

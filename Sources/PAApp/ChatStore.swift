@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import PACore
 
 /// What the chat list renders for one turn.
@@ -27,7 +28,8 @@ struct DisplayItem: Identifiable, Hashable {
 
 /// Owns the current session, drives the agent and persists everything.
 @MainActor
-final class ChatStore: ObservableObject {
+@Observable
+final class ChatStore {
     static let shared = ChatStore()
 
     enum Phase: Equatable {
@@ -37,16 +39,18 @@ final class ChatStore: ObservableObject {
         case runningTool(String)
     }
 
-    @Published private(set) var session: ChatSession?
-    @Published private(set) var items: [DisplayItem] = []
-    @Published private(set) var phase: Phase = .idle
-    @Published private(set) var pendingApproval: ApprovalRequest?
-    @Published private(set) var lastError: String?
-    @Published private(set) var note: String?
-    @Published private(set) var preApprovedTools: Set<String> = []
-    @Published private(set) var sessionList: [ChatSession] = []
+    private(set) var session: ChatSession?
+    private(set) var items: [DisplayItem] = []
+    private(set) var phase: Phase = .idle
+    private(set) var pendingApproval: ApprovalRequest?
+    private(set) var lastError: String?
+    private(set) var note: String?
+    private(set) var preApprovedTools: Set<String> = []
+    private(set) var sessionList: [ChatSession] = []
     /// The session list lives in a sidebar of the chat window, not a separate screen.
-    @Published var showSidebar = true
+    var showSidebar = true
+    /// Older messages live behind this flag instead of being loaded up front.
+    private(set) var hasEarlierMessages = false
 
     func report(_ text: String?) {
         lastError = text
@@ -60,6 +64,12 @@ final class ChatStore: ObservableObject {
     let store: MemoryStore
     private var runTask: Task<Void, Never>?
     private var activeToolName: String?
+    /// How many messages one page of history holds.
+    private static let pageSize = 200
+    private var oldestLoadedSeq: Int?
+    /// Monotonic counter for `seq`; display order and storage order must not drift apart
+    /// once a session is loaded in pages.
+    private var nextSeq = 0
     /// Gist of turns already compressed out of this session's transcript.
     private var currentSummary: ConversationSummary?
 
@@ -102,6 +112,9 @@ final class ChatStore: ObservableObject {
         items = []
         preApprovedTools = []
         currentSummary = nil
+        oldestLoadedSeq = nil
+        hasEarlierMessages = false
+        nextSeq = 0
         Task {
             do {
                 session = try await store.createSession(principalID: agent.id)
@@ -118,7 +131,9 @@ final class ChatStore: ObservableObject {
         do {
             if let latest = try await store.listSessions(limit: 1).first {
                 session = latest
-                items = Self.displayItems(for: try await store.messages(in: latest.id))
+                let page = try await store.recentMessages(in: latest.id, limit: Self.pageSize)
+                items = Self.displayItems(for: page)
+                apply(page: page, sessionID: latest.id)
                 currentSummary = try await store.summary(for: latest.id)
             } else {
                 session = try await store.createSession(principalID: agent.id)
@@ -133,11 +148,40 @@ final class ChatStore: ObservableObject {
         cancel()
         do {
             session = target
-            items = Self.displayItems(for: try await store.messages(in: target.id))
+            let page = try await store.recentMessages(in: target.id, limit: Self.pageSize)
+            items = Self.displayItems(for: page)
+            apply(page: page, sessionID: target.id)
             preApprovedTools = []
             currentSummary = try await store.summary(for: target.id)
         } catch {
             lastError = "打开会话失败：\(error.localizedDescription)"
+        }
+    }
+
+    /// Remembers where the loaded window starts and what the next `seq` should be.
+    private func apply(page: [ChatMessage], sessionID: String) {
+        oldestLoadedSeq = page.first?.seq
+        hasEarlierMessages = (oldestLoadedSeq ?? 0) > 0
+        nextSeq = ((page.last?.seq ?? -1) + 1)
+        preApprovedTools = []
+        _ = sessionID
+    }
+
+    /// Prepends the previous page. The scroll position is kept by the view, which pins the
+    /// id of the message that was on top.
+    func loadEarlier() async {
+        guard let sessionID = session?.id, let oldest = oldestLoadedSeq, hasEarlierMessages else { return }
+        do {
+            let page = try await store.recentMessages(in: sessionID, limit: Self.pageSize, beforeSeq: oldest)
+            guard !page.isEmpty else {
+                hasEarlierMessages = false
+                return
+            }
+            oldestLoadedSeq = page.first?.seq
+            hasEarlierMessages = (oldestLoadedSeq ?? 0) > 0
+            items = Self.displayItems(for: page) + items
+        } catch {
+            lastError = "加载更早的消息失败：\(error.localizedDescription)"
         }
     }
 
@@ -184,11 +228,12 @@ final class ChatStore: ObservableObject {
 
             let userMessage = ChatMessage(
                 id: UUID().uuidString,
-                seq: self.items.count,
+                seq: self.nextSeq,
                 role: .user,
                 author: .user,
                 content: text
             )
+            self.nextSeq += 1
             do {
                 try await self.store.append(userMessage, to: sessionID)
                 if self.session?.title.isEmpty == true {
@@ -201,24 +246,120 @@ final class ChatStore: ObservableObject {
                 self.lastError = "保存消息失败：\(error.localizedDescription)"
             }
 
-            let history = ((try? await self.store.messages(in: sessionID)) ?? []).dropLast()
-            let request = RunRequest(
-                profile: agent,
-                history: Array(history),
-                input: text,
-                sessionID: sessionID,
-                preApprovedTools: self.preApprovedTools,
-                summary: self.currentSummary
-            )
+            if settings.answerRoute == .second {
+                await self.answerViaSecondChannel(text, settings: settings, agent: agent)
+            } else {
+                // The runner trims to a character budget anyway; hand it a bounded window.
+                let history = ((try? await self.store.recentMessages(in: sessionID, limit: 400)) ?? []).dropLast()
+                let request = RunRequest(
+                    profile: agent,
+                    history: Array(history),
+                    input: text,
+                    sessionID: sessionID,
+                    preApprovedTools: self.preApprovedTools,
+                    summary: self.currentSummary
+                )
 
-            for await event in runner.events(for: request) {
-                if Task.isCancelled { break }
-                self.handle(event)
+                for await event in runner.events(for: request) {
+                    if Task.isCancelled { break }
+                    self.handle(event)
+                }
             }
             self.phase = .idle
             self.note = nil
             self.runTask = nil
             await self.reloadSessions()
+        }
+    }
+
+
+    // MARK: Second channel
+
+    /// One question in, one answer out: no tools, no history replay. The main model may first
+    /// condense the message and the session summary into notes for it to read.
+    private func answerViaSecondChannel(_ text: String, settings: AppSettings.Snapshot, agent: AgentProfile) async {
+        var context = currentSummary?.text ?? ""
+
+        if settings.preprocessWithMain {
+            note = "主模型整理中…"
+            if let organized = try? await organize(text, summary: context, settings: settings, agent: agent),
+               !organized.isEmpty {
+                context = organized
+            }
+        }
+        guard !Task.isCancelled else { return }
+
+        note = "第二通道回答中…"
+        let channel = AnswerChannel()
+        let client = OpenAICompatibleClient(baseURL: settings.secondBaseURL, apiKey: settings.secondKey)
+        let request = channel.request(
+            model: settings.secondModel,
+            prompt: channel.prompt(question: text, context: context),
+            temperature: settings.temperature
+        )
+
+        var answer = ""
+        do {
+            for try await event in client.stream(request) {
+                if Task.isCancelled { return }
+                guard case .textDelta(let fragment) = event else { continue }
+                answer += fragment
+                appendAssistantDelta(fragment)
+                phase = .streaming
+            }
+        } catch is CancellationError {
+            return
+        } catch {
+            lastError = "第二通道请求失败：\(error.localizedDescription)"
+        }
+
+        note = nil
+        if let last = items.last, last.isStreaming {
+            items[items.count - 1].isStreaming = false
+        }
+        guard !answer.isEmpty else { return }
+        persist(ChatMessage(
+            id: UUID().uuidString,
+            seq: 0,
+            role: .assistant,
+            author: .agent(agent.id),
+            content: answer
+        ))
+    }
+
+    /// The main model reads the message and the running summary, and returns notes for the
+    /// second channel — it does not answer the question itself.
+    private func organize(
+        _ text: String, summary: String, settings: AppSettings.Snapshot, agent: AgentProfile
+    ) async throws -> String {
+        let channel = AnswerChannel(instruction: """
+        你在为另一个模型准备材料：把用户这一句话整理成清晰完整的问题，必要时补上背景，不要自己回答。
+        只输出整理后的内容。
+        """)
+        let prompt = channel.prompt(question: text, context: summary)
+        let client = OpenAICompatibleClient(baseURL: settings.baseURL, apiKey: settings.modelKey)
+        let request = channel.request(
+            model: agent.model ?? settings.model,
+            prompt: prompt,
+            temperature: 0.2
+        )
+        var notes = ""
+        for try await event in client.stream(request) {
+            if case .textDelta(let fragment) = event { notes += fragment }
+        }
+        return notes.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func appendAssistantDelta(_ fragment: String) {
+        if let last = items.last, last.isStreaming, case .assistant = last.kind {
+            items[items.count - 1].content = .text(last.text + fragment)
+        } else {
+            items.append(DisplayItem(
+                id: UUID().uuidString,
+                kind: .assistant,
+                content: .text(fragment),
+                isStreaming: true
+            ))
         }
     }
 
@@ -359,7 +500,8 @@ final class ChatStore: ObservableObject {
 
     private func persist(_ message: ChatMessage) {
         guard let sessionID = session?.id else { return }
-        let seq = items.count
+        let seq = nextSeq
+        nextSeq += 1
         Task { [store] in
             try? await store.append(
                 ChatMessage(

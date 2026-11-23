@@ -32,6 +32,12 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>LSUIElement</key><true/>
     <key>NSPrincipalClass</key><string>NSApplication</string>
+    <!-- Endpoints are user-configured: local proxies and self-hosted servers are usually
+         plain http. Loads are only ever made to the URL the user typed in settings. -->
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsArbitraryLoads</key><true/>
+    </dict>
 </dict>
 </plist>
 PLIST

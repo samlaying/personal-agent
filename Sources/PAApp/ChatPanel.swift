@@ -29,8 +29,8 @@ final class ChatPanelController {
         guard panel == nil else { return }
 
         let chat = ChatView()
-            .environmentObject(ChatStore.shared)
-            .environmentObject(AgentDirectory.shared)
+            .environment(ChatStore.shared)
+            .environment(AgentDirectory.shared)
 
         let content = NSHostingView(rootView: chat)
         // Wide enough for the session sidebar plus the conversation column.
