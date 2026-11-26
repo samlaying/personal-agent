@@ -47,10 +47,11 @@ final class ChatPanelController {
         panel.title = "个人助理"
         panel.titlebarAppearsTransparent = true
         panel.titleVisibility = .hidden
-        panel.isFloatingPanel = true
-        panel.level = .floating
+        // 不再钉死在最前：点击其他 app 时，它们的窗口自动到前面来，面板在失活时收起
+        // （hidesOnDeactivate）；⌥Space 或菜单栏 ✨ 再唤出时回到最前。
+        panel.isFloatingPanel = false
+        panel.level = .normal
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        // 点到别的 app 就收起面板（和 Spotlight 一致）；⌥Space 或菜单栏随时再唤出。
         panel.hidesOnDeactivate = true
         panel.isReleasedWhenClosed = false
         panel.minSize = NSSize(width: 620, height: 480)
