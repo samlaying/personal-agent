@@ -54,13 +54,14 @@
 6. 视图改用 `@Environment(Type.self)` + `@Bindable`
 7. 去掉 `ObservableObject` / `@Published` / `@EnvironmentObject`
 
-**P2 工程化（需你参与）**
-8. 生成 Xcode 工程（xcodegen 或手建），保留 SPM 供 CI
-9. Developer ID 签名 + `notarytool` 公证 + `stapler`，写进 `scripts/release.sh`
-10. 版本号/构建号从 `Package.swift` 或 `version.txt` 单一来源
+**P2 工程化（脚手架已完成，待环境）**
+8. ✅ `project.yml`（XcodeGen 描述）—— `xcodegen generate` 生成工程，`.xcodeproj` 不入库
+9. ✅ `scripts/release.sh`：`xcodebuild archive` → 导出 → 签名 → 公证 → `stapler` → 打 zip → 可选 `gh release`；缺 Xcode/证书时自动退回 ad-hoc
+10. ✅ 版本号单一来源：`project.yml` 的 `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION`
+11. ⏳ 待办（需要环境）：装 Xcode、`brew install xcodegen`、Developer ID 证书、`notarytool store-credentials pa-notary`
 
 **P3 分发与体验**
-11. Sparkle 2：`appcast.xml` 放 GitHub Releases，菜单栏加「检查更新」
-12. （可选）`KeyboardShortcuts` 换掉自写热键，设置页支持自定义组合键
+12. Sparkle 2：`appcast.xml` 放 GitHub Releases，菜单栏加「检查更新」
+13. （可选）`KeyboardShortcuts` 换掉自写热键，设置页支持自定义组合键
 
 P0/P1 不改公开行为、不引入依赖，测试可覆盖；P2 之后需要开发者证书。

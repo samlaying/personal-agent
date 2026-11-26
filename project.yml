@@ -1,0 +1,62 @@
+# XcodeGen 工程描述：`xcodegen generate` 生成 PersonalAgent.xcodeproj。
+# 仓库里不提交 .xcodeproj（见 .gitignore），工程配置以这个文件为唯一来源，
+# 这样可以避免 pbxproj 冲突，也让 `swift build` / CI 继续复用 Package.swift。
+name: PersonalAgent
+
+options:
+  bundleIdPrefix: com.sam
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+
+packages:
+  PersonalAgentPackage:
+    path: .
+
+targets:
+  PersonalAgent:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/PAApp
+    dependencies:
+      - package: PersonalAgentPackage
+        product: PACore
+    info:
+      path: Support/Info.plist
+      properties:
+        CFBundleDisplayName: 个人助理
+        CFBundleName: PersonalAgent
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSMinimumSystemVersion: "14.0"
+        LSUIElement: true
+        NSPrincipalClass: NSApplication
+        # 端点由用户自己填，本地代理/自托管服务通常是明文 http
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+    settings:
+      base:
+        PRODUCT_NAME: PersonalAgent
+        PRODUCT_BUNDLE_IDENTIFIER: com.sam.personal-agent
+        MARKETING_VERSION: "0.0.1"
+        CURRENT_PROJECT_VERSION: "3"
+        SWIFT_VERSION: "6.0"
+        MACOSX_DEPLOYMENT_TARGET: "14.0"
+        ENABLE_HARDENED_RUNTIME: YES
+        GENERATE_INFOPLIST_FILE: NO
+        # 默认 ad-hoc；`scripts/release.sh` 会覆盖成 Developer ID
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "-"
+        DEVELOPMENT_TEAM: ""
+
+schemes:
+  PersonalAgent:
+    build:
+      targets:
+        PersonalAgent: all
+    run:
+      config: Debug
+    archive:
+      config: Release

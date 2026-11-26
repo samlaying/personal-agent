@@ -6,6 +6,11 @@ cd "$(dirname "$0")/.."
 
 APP_NAME="PersonalAgent"
 BUNDLE_ID="com.sam.personal-agent"
+# 版本号只有一个来源：project.yml
+VERSION=$(awk -F'"' '/MARKETING_VERSION:/ {print $2; exit}' project.yml)
+BUILD_NUMBER=$(awk -F'"' '/CURRENT_PROJECT_VERSION:/ {print $2; exit}' project.yml)
+VERSION=${VERSION:-0.0.0}
+BUILD_NUMBER=${BUILD_NUMBER:-1}
 OUT=".build/app"
 APP="$OUT/$APP_NAME.app"
 
@@ -27,8 +32,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
     <key>CFBundleExecutable</key><string>$APP_NAME</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleVersion</key><string>2</string>
-    <key>CFBundleShortVersionString</key><string>0.0.1</string>
+    <key>CFBundleVersion</key><string>$BUILD_NUMBER</string>
+    <key>CFBundleShortVersionString</key><string>$VERSION</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>LSUIElement</key><true/>
     <key>NSPrincipalClass</key><string>NSApplication</string>

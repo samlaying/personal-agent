@@ -26,10 +26,14 @@ open .build/app/PersonalAgent.app
 ## 命令
 
 ```bash
-scripts/test.sh      # 全部单元测试（无需完整 Xcode，CLT 即可）
-scripts/build-app.sh # Release 打包
-scripts/e2e.sh       # 冒烟：本地 mock 模型 + 启动/常驻/内存/落库
+scripts/test.sh          # 全部单元测试（无需完整 Xcode，CLT 即可）
+scripts/build-app.sh     # Release 打包（ad-hoc）
+scripts/e2e.sh           # 冒烟：本地 mock 模型 + 启动/常驻/内存/落库
+scripts/release.sh       # 打包 → 签名 → 公证 → 可选发布（自动降级）
+scripts/release.sh --doctor   # 检查 Xcode / 证书 / 公证凭据
 ```
+
+`release.sh` 的行为取决于环境：有 Xcode + Developer ID + 公证凭据时走 `xcodebuild archive` → `notarytool` → `stapler`；缺任何一项就退回 ad-hoc 打包（`--adhoc` 可强制）。版本号只有一个来源：`project.yml` 里的 `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION`。
 
 ## 内置工具
 
@@ -109,7 +113,7 @@ tools:  工具 Schema（tool_choice=auto）
 
 - reasoning 展示但不持久化（重开会话后不可见）
 - 面板固定浮在最前（未做「仅当前空间」选项）
-- 分发需自行 Developer ID 签名 + 公证（当前脚本为 ad-hoc 签名，仅本机可用）
+- 默认 ad-hoc 签名：别人下载后需右键打开。配置 Developer ID 证书 + `notarytool store-credentials pa-notary` 后，`scripts/release.sh` 会自动签名并公证
 
 ## 许可证
 

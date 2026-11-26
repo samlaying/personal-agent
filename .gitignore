@@ -4,3 +4,6 @@
 /.swiftpm
 /Packages
 xcuserdata/
+Support/Info.plist
+build/
+PersonalAgent.xcodeproj/

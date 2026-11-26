@@ -17,7 +17,11 @@ swift build                 # 快速类型检查
 scripts/test.sh             # 全部单元测试（swift-testing；本机只有 Command Line Tools，脚本里已带 -F 和 rpath）
 scripts/build-app.sh        # Release 打包到 .build/app/PersonalAgent.app
 scripts/e2e.sh              # 冒烟：本地 mock 模型 + 启动/常驻/内存/落库检查
+scripts/release.sh          # 打包 → 签名 → 公证 → 发布；--doctor 检查环境
 ```
+
+版本号只有一个来源：`project.yml` 的 `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION`，`build-app.sh` 与 `release.sh` 都从那里读。
+Xcode 工程由 `xcodegen generate` 从 `project.yml` 生成，**不提交 `.xcodeproj`**（避免 pbxproj 冲突）；CI 仍然只用 SwiftPM。
 
 改完必须跑 `scripts/test.sh`，全绿才算完。CI（`.github/workflows/test.yml`）在 macOS runner 上跑同样两步。
 
