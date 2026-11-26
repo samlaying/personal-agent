@@ -50,7 +50,8 @@ final class ChatPanelController {
         panel.isFloatingPanel = true
         panel.level = .floating
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        panel.hidesOnDeactivate = false
+        // 点到别的 app 就收起面板（和 Spotlight 一致）；⌥Space 或菜单栏随时再唤出。
+        panel.hidesOnDeactivate = true
         panel.isReleasedWhenClosed = false
         panel.minSize = NSSize(width: 620, height: 480)
         panel.contentView = content
