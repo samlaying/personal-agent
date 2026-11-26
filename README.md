@@ -8,15 +8,14 @@
 
 ## 快速开始
 
-直接下载：[Releases](https://github.com/samlaying/personal-agent/releases) 里的 `PersonalAgent-*.zip`（Apple Silicon，ad-hoc 签名，首次打开需右键 →「打开」）。
-
-或者从源码跑：
+本项目定位是**本机自用，不分发**：克隆下来一条命令就能跑，不依赖证书、不公证。
 
 ```bash
-# 编译 + 打包 .app（首次约 1 分钟）
-scripts/build-app.sh
-open .build/app/PersonalAgent.app
+git clone https://github.com/samlaying/personal-agent && cd personal-agent
+scripts/run.sh           # 编译 + 启动（首次约 1 分钟）
 ```
+
+以后想给别人用，`scripts/release.sh` 已备好签名/公证流水线（需要 Developer ID）。
 
 1. 菜单栏出现 ✨ 图标，点「设置…」
 2. 填模型 API：Base URL（任何 OpenAI 兼容端点，如 `https://api.openai.com/v1`）、模型名、API Key（存 Keychain）
@@ -26,6 +25,7 @@ open .build/app/PersonalAgent.app
 ## 命令
 
 ```bash
+scripts/run.sh           # 一条命令：编译 + 启动（--clean 强制重编）
 scripts/test.sh          # 全部单元测试（无需完整 Xcode，CLT 即可）
 scripts/build-app.sh     # Release 打包（ad-hoc）
 scripts/e2e.sh           # 冒烟：本地 mock 模型 + 启动/常驻/内存/落库

@@ -7,6 +7,7 @@
 原生 macOS 个人助理 Agent：菜单栏常驻 + ⌥Space 浮动面板 + 流式对话 + 工具调用（带人工审批）+ SQLite 长期记忆。
 
 - 包名 `PersonalAgent`，GitHub `samlaying/personal-agent`，应用显示名「个人助理」，bundle id `com.sam.personal-agent`
+- **定位：本机自用，不分发**。不做签名/公证/自动更新那条线，`scripts/run.sh` 一条命令启动
 - 只依赖系统框架（SwiftUI / AppKit / Foundation / SQLite3 / Carbon / Security）。**不要引入第三方 Swift 包**——体积和启动时间是硬指标
 - 硬指标：`.app` ≈ 2MB，空闲 RSS ≈ 80MB。任何改动都不能明显抬高这两项（禁止 WebView、禁止额外常驻进程）
 
@@ -17,7 +18,8 @@ swift build                 # 快速类型检查
 scripts/test.sh             # 全部单元测试（swift-testing；本机只有 Command Line Tools，脚本里已带 -F 和 rpath）
 scripts/build-app.sh        # Release 打包到 .build/app/PersonalAgent.app
 scripts/e2e.sh              # 冒烟：本地 mock 模型 + 启动/常驻/内存/落库检查
-scripts/release.sh          # 打包 → 签名 → 公证 → 发布；--doctor 检查环境
+scripts/run.sh              # 编译 + 启动（--clean 强制重编）
+scripts/release.sh          # 可选：签名/公证/发布流水线（不分发时用不到）
 ```
 
 版本号只有一个来源：`project.yml` 的 `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION`，`build-app.sh` 与 `release.sh` 都从那里读。

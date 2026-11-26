@@ -43,6 +43,8 @@
 
 ## 四、落地顺序
 
+> 2026-11-26 更新：项目定位改为**本机自用、不分发**。P2/P3 里的签名、公证、Sparkle 全部降级为「可选」，保留脚手架（`project.yml` + `release.sh`）但不再推进；日常入口是 `scripts/run.sh`。
+
 **P0 性能（本次）**
 1. `ChatView`：`VStack` → `LazyVStack`，reasoning/工具默认折叠
 2. `MemoryStore.messages(in:limit:beforeSeq:)`：倒序取 N 条再反转
