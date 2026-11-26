@@ -97,6 +97,44 @@ Tests/PACoreTests/  swift-testing（@Test / #expect）
 - **accessory 应用没有 Dock 图标，窗口最小化后会流落到 Dock 角落**：面板的黄色按钮用 `FloatingPanel.miniaturize` 改成直接 `orderOut`，`show()` 里再 `deminiaturize` 兜底
 ## Git
 
-- 默认在 `main` 上工作；较大改动先开分支（如 `feat/xxx`），测试绿了再合
-- 提交信息用中文短句描述做了什么
-- 只有用户明确要求时才 push 或发 Release
+### 分支
+
+- 长期只有 `main`，它始终处于可编译、测试全绿的状态；不设 develop 之类的集成分支
+- 小改动直接提交到 `main`；一件事超过 3 个文件，或要动 `MemoryStore` 的 schema、`AgentRunner` 的循环，先开分支
+- 分支一律从最新的 `main` 切出，命名 `<type>/<短横线描述>`，全小写：
+
+  | 前缀 | 用途 | 例子 |
+  |---|---|---|
+  | `feat/` | 新功能、新工具、新窗口 | `feat/trace-panel` |
+  | `fix/` | 修 bug | `fix/statusbar-not-visible` |
+  | `refactor/` | 不改行为的结构调整 | `refactor/runner-stateless` |
+  | `chore/` | 构建脚本、工程配置、版本号、CI | `chore/bump-version` |
+  | `docs/` | 只动 markdown | `docs/git-conventions` |
+
+- 合并前 `git rebase main`（**不要**把 main merge 进分支），保持历史线性；再 `git checkout main && git merge --ff-only <branch>`
+- 合完删本地分支；没合的分支不推远端
+
+### 提交信息
+
+格式：`<type>: <中文短句>`，`type` 用英文小写，与分支前缀同一套（另加 `test` / `perf` / `ci` / `build`）。
+
+```text
+feat: 加 delegate 工具支持父 Agent 调起子 Agent
+fix: 修掉刘海屏上状态栏图标不可见
+chore: 版本号改为 0.0.2
+```
+
+- 冒号后用**中文**，一句话说清「做了什么」；不写「修改了…」「更新了…」这类空话，末尾不加句号
+- 主题行 50 个字符以内（中文按 2 计）
+- 需要说「为什么」时空一行写正文，正文也用中文。**平台坑和大的重构必须写正文**，把踩坑结论留档
+- 一个提交只做一件事：重构与功能分开，格式化与逻辑改动分开
+- 提交前必须跑 `scripts/test.sh` 全绿
+- 不写 emoji，不加 `[skip ci]`，不手写 `Co-authored-by`
+- 历史遗留的无前缀提交不回填、不改写，往后按新格式来
+
+### 推送与发布
+
+- **只有用户明确要求才 push、打 tag 或发 Release**；CI 只在 push 到 `main` 时跑
+- 版本号唯一来源是 `project.yml` 的 `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION`，改版本单独一个 `chore:` 提交
+- 不改写已推送的历史（不 `push --force`、不 rebase 公共分支）；确实需要时先问
+- 不提交的东西见上文：`.xcodeproj`、大二进制、真实 API Key
