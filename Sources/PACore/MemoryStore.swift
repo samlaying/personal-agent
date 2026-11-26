@@ -115,6 +115,7 @@ public actor MemoryStore {
 
     public func deleteSession(_ sessionID: String) throws {
         try transaction {
+            try run("DELETE FROM turn_traces WHERE session_id = ?", [.text(sessionID)])
             try run("DELETE FROM messages_fts WHERE session_id = ?", [.text(sessionID)])
             try run("DELETE FROM messages WHERE session_id = ?", [.text(sessionID)])
             try run("DELETE FROM sessions WHERE id = ?", [.text(sessionID)])
@@ -237,6 +238,49 @@ public actor MemoryStore {
         }
     }
 
+    // MARK: Turn traces
+
+    public func saveTrace(_ payload: TracePayload, sessionID: String) throws {
+        let text = try payload.encoded()
+        let promptChars = payload.messages.reduce(0) { $0 + $1.chars }
+            + payload.systemSections.reduce(0) { $0 + $1.text.count }
+        try run(
+            """
+            INSERT INTO turn_traces (id, session_id, created_at, model, route, duration_ms, prompt_chars, payload)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                .text(UUID().uuidString), .text(sessionID), .real(Date().timeIntervalSince1970),
+                .text(payload.model), .text(payload.route), .real(payload.durationMs),
+                .int(promptChars), .text(text),
+            ]
+        )
+    }
+
+    public func traceSummaries(in sessionID: String, limit: Int = 30) throws -> [TraceSummary] {
+        try rows(
+            """
+            SELECT id, created_at, model, route, duration_ms, prompt_chars
+            FROM turn_traces WHERE session_id = ? ORDER BY created_at DESC LIMIT ?
+            """,
+            [.text(sessionID), .int(limit)]
+        ) { statement in
+            TraceSummary(
+                id: statement.text(0),
+                createdAt: Date(timeIntervalSince1970: statement.double(1)),
+                model: statement.text(2),
+                route: statement.text(3),
+                durationMs: statement.double(4),
+                promptChars: statement.int(5)
+            )
+        }
+    }
+
+    public func tracePayload(id: String) throws -> TracePayload? {
+        try rows("SELECT payload FROM turn_traces WHERE id = ?", [.text(id)]) { $0.text(0) }
+            .first.flatMap(TracePayload.decode)
+    }
+
     // MARK: Agents
 
     public func agents() throws -> [AgentProfile] {
@@ -356,6 +400,17 @@ public actor MemoryStore {
             model TEXT,
             created_at REAL NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS turn_traces (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            created_at REAL NOT NULL,
+            model TEXT NOT NULL,
+            route TEXT NOT NULL,
+            duration_ms REAL NOT NULL,
+            prompt_chars INTEGER NOT NULL DEFAULT 0,
+            payload TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS turn_traces_session ON turn_traces(session_id, created_at DESC);
         CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
             message_id UNINDEXED, session_id UNINDEXED, body, tokenize='unicode61'
         );

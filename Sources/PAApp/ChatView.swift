@@ -90,6 +90,9 @@ struct ChatView: View {
                 store.newSession(agent: directory.current)
                 inputFocused = true
             }
+            iconButton("list.bullet.rectangle", help: "运行轨迹（每轮的系统步骤与提示词构成）") {
+                TraceWindowController.shared.show()
+            }
             iconButton("gearshape", help: "设置") {
                 SettingsWindowController.shared.show()
             }

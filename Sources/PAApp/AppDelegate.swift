@@ -19,6 +19,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         // Show the panel right away: a menu bar item alone is easy to miss.
         ChatPanelController.shared.show()
+
+        // Dev aid: defaults write com.sam.personal-agent dev.openTraceOnLaunch -bool YES
+        if UserDefaults.standard.bool(forKey: "dev.openTraceOnLaunch") {
+            TraceWindowController.shared.show()
+        }
     }
 
     // MARK: Menu bar item

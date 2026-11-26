@@ -51,6 +51,7 @@ Tests/PACoreTests/  swift-testing（@Test / #expect）
 | `PACore/TextTokenizer.swift` | 中文 FTS 分词补丁（`CJKText`） |
 | `PAApp/ChatStore.swift` | 会话状态机、事件消费、落库 |
 | `PAApp/ChatView.swift`、`SessionSidebar.swift` | 对话 UI、左侧会话列表 |
+| `PACore/Trace.swift`、`PAApp/TraceView.swift` | 轨迹：每轮的步骤/耗时/提示词构成，落 `turn_traces` 表 |
 
 ## 代码约定
 
@@ -77,6 +78,7 @@ Tests/PACoreTests/  swift-testing（@Test / #expect）
 - 超预算：`split` 报告被丢弃的消息 → `ContextSummarizer` 压成 ≤800 字摘要 → 写进 `sessions.summary` / `summary_through_seq` 并在下轮复用；失败则退回直接截断
 - 裁剪后必须修头部：不能以孤儿 `tool` 消息或结果不全的 `assistant.tool_calls` 开头，否则 provider 会 400
 - `AgentRunner` **无状态**（每次 run 独立），这是多 Agent 嵌套调用的前提，不要往里塞实例状态
+- 每轮轨迹经 `RunRequest.trace`（`TraceRecorder`）记录并在结束时写 `turn_traces`；加新步骤时记得同时记录，轨迹查看器是排障的第一入口
 
 ## 多 Agent（预留，未实现）
 

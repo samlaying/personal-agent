@@ -36,3 +36,28 @@ final class SettingsWindowController {
         window?.close()
     }
 }
+
+/// Viewer for the persisted per-turn traces (call chain + prompt composition).
+@MainActor
+final class TraceWindowController {
+    static let shared = TraceWindowController()
+    private var window: NSWindow?
+
+    func show() {
+        if window == nil {
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 1000, height: 680),
+                styleMask: [.titled, .closable, .resizable],
+                backing: .buffered,
+                defer: false
+            )
+            window.title = "运行轨迹"
+            window.contentView = NSHostingView(rootView: TraceView().environment(ChatStore.shared))
+            window.isReleasedWhenClosed = false
+            window.center()
+            self.window = window
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        window?.makeKeyAndOrderFront(nil)
+    }
+}

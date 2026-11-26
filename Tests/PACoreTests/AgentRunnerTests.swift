@@ -195,3 +195,71 @@ struct AgentRunnerTests {
         #expect(prompt.contains("当前时间"))
     }
 }
+
+
+struct AgentTraceTests {
+    private struct Echo: AgentTool {
+        let name = "echo"
+        let summary = "回显输入"
+        let risk = RiskLevel.readOnly
+        let parameters = JSONSchema.object(["text": "要回显的内容"], required: ["text"])
+
+        func run(arguments: String, context: ToolContext) async throws -> String { "已回显" }
+    }
+
+    private func runner(_ client: any ModelClient) -> AgentRunner {
+        AgentRunner(
+            client: client,
+            tools: ToolRegistry([Echo()]),
+            prompt: PromptContext(userProfile: "喜欢简洁", memoryNotes: "", environmentSummary: "macOS 测试机"),
+            defaultModel: "mock-model"
+        )
+    }
+
+    @Test func traceRecordsChainAndPromptComposition() async throws {
+        let recorder = TraceRecorder(route: "agent", model: "mock-model")
+        let agent = runner(ScriptedClient(steps: [
+            .tool(name: "echo", arguments: "{\"text\":\"你好\"}"),
+            .text("回答完成"),
+        ]))
+
+        for await _ in agent.events(for: RunRequest(
+            profile: .makeDefault(), history: [], input: "打个招呼", sessionID: "s1", trace: recorder
+        )) {}
+
+        let payload = recorder.finish()
+        let names = payload.steps.map(\.name)
+        #expect(names.contains("载入历史"))
+        #expect(names.contains("组装提示词"))
+        #expect(names.contains("模型请求 #1"))
+        #expect(names.contains("模型请求 #2"))
+        #expect(names.contains("工具 · echo"))
+
+        // Prompt composition: identity first, sources attached, summary absent.
+        #expect(payload.systemSections.first?.title == "身份")
+        #expect(payload.systemSections.contains { $0.source == "USER.md" && $0.text.contains("喜欢简洁") })
+        #expect(payload.systemSections.contains { $0.source == "ToolRegistry" })
+        // The transcript never contains system (it is separate) and the final assembly
+        // happens after the tool exchange, so it ends with the tool result.
+        #expect(payload.messages.first?.role == "user")
+        #expect(payload.messages.last?.role == "tool")
+
+        // Tool call card got its result preview.
+        #expect(payload.toolCalls.count == 1)
+        #expect(payload.toolCalls[0].name == "echo")
+
+        // Budget block is filled in.
+        #expect(payload.budget["预算字符"] != nil)
+    }
+
+    @Test func traceWithoutRecorderRunsNormally() async throws {
+        let agent = runner(ScriptedClient(steps: [.text("ok")]))
+        var answer = ""
+        for await event in agent.events(for: RunRequest(
+            profile: .makeDefault(), history: [], input: "hi", sessionID: "s1"
+        )) {
+            if case .textDelta(let fragment) = event { answer += fragment }
+        }
+        #expect(answer == "ok")
+    }
+}

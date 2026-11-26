@@ -31,6 +31,9 @@ public struct RunRequest: Sendable {
     public var preApprovedTools: Set<String>
     /// What earlier turns were compressed into, if the session was summarized before.
     public var summary: ConversationSummary?
+    /// Optional observer: when present, the runner records what it did and how the prompt
+    /// was assembled, so the trace viewer can show exactly where every part came from.
+    public var trace: TraceRecorder?
 
     public init(
         profile: AgentProfile,
@@ -38,7 +41,8 @@ public struct RunRequest: Sendable {
         input: String,
         sessionID: String,
         preApprovedTools: Set<String> = [],
-        summary: ConversationSummary? = nil
+        summary: ConversationSummary? = nil,
+        trace: TraceRecorder? = nil
     ) {
         self.profile = profile
         self.history = history
@@ -46,6 +50,7 @@ public struct RunRequest: Sendable {
         self.sessionID = sessionID
         self.preApprovedTools = preApprovedTools
         self.summary = summary
+        self.trace = trace
     }
 }
 
@@ -192,10 +197,31 @@ public struct AgentRunner: Sendable {
         }
     }
 
+    /// Times `body` when a recorder is present, otherwise just runs it.
+    private func traced<T>(
+        _ trace: TraceRecorder?, _ name: String, detail: String = "",
+        meta: [String: String] = [:], _ body: () async throws -> T
+    ) async throws -> T {
+        guard let trace else { return try await body() }
+        return try await trace.span(name, detail: detail, meta: meta, body)
+    }
+
     private func execute(_ request: RunRequest, into out: AsyncStream<AgentEvent>.Continuation) async throws {
         let agentID = request.profile.id
         let approvals = ApprovalMemory(request.preApprovedTools)
         let model = request.profile.model ?? defaultModel
+        let trace = request.trace
+
+        if let trace {
+            let seqs = request.history.map(\.seq)
+            trace.step(TraceStep(
+                name: "载入历史",
+                detail: request.history.isEmpty
+                    ? "0 条（首轮）"
+                    : "\(request.history.count) 条 · seq \(seqs.min() ?? 0)–\(seqs.max() ?? 0)",
+                meta: ["模型": model, "已压缩到": "\(request.summary?.throughSeq ?? 0)"]
+            ))
+        }
 
         var context = prompt
         var summaryThrough = request.summary?.throughSeq ?? 0
@@ -210,12 +236,14 @@ public struct AgentRunner: Sendable {
         let initial = TranscriptBuilder.split(pending, budgetChars: transcriptBudgetChars)
         if !initial.dropped.isEmpty {
             do {
-                let merged = try await summarizer.summarize(
-                    existing: context.earlierSummary,
-                    dropped: initial.dropped,
-                    client: client,
-                    model: model
-                )
+                let merged = try await traced(trace, "压缩摘要", detail: "\(initial.dropped.count) 条消息超出预算", meta: ["丢弃": "\(initial.dropped.count)"]) {
+                    try await self.summarizer.summarize(
+                        existing: context.earlierSummary,
+                        dropped: initial.dropped,
+                        client: client,
+                        model: model
+                    )
+                }
                 context.earlierSummary = merged
                 let droppedThrough = initial.dropped.map(\.seq).max() ?? summaryThrough
                 summaryThrough = max(summaryThrough, droppedThrough)
@@ -230,17 +258,45 @@ public struct AgentRunner: Sendable {
 
         var transcript = pending + [ChatMessage(role: .user, author: .user, content: request.input)]
 
+        var requestIndex = 0
         for _ in 0..<maxSteps {
             try Task.checkCancellation()
+            requestIndex += 1
 
-            let system = SystemPrompt.make(
+            let sections = SystemPrompt.sections(
                 profile: request.profile,
                 context: context,
                 toolNames: tools.names,
                 now: Date()
             )
-            let messages = [RequestMessage(role: .system, content: system)]
-                + TranscriptBuilder.trim(transcript, budgetChars: transcriptBudgetChars).map(RequestMessage.init)
+            let system = sections.map(\.text).joined(separator: "\n\n")
+            let trimmed = TranscriptBuilder.trim(transcript, budgetChars: transcriptBudgetChars)
+            if let trace {
+                trace.setPrompt(
+                    sections: sections.map { TraceSection(title: $0.title, source: $0.source, text: $0.text) },
+                    messages: trimmed.map {
+                        TraceMessage(
+                            role: $0.role.rawValue,
+                            name: $0.name,
+                            seq: $0.seq,
+                            text: $0.role == .tool ? "[工具结果] " + $0.content : $0.content
+                        )
+                    },
+                    budget: [
+                        "预算字符": "\(transcriptBudgetChars)",
+                        "实际字符": "\(trimmed.reduce(0) { $0 + $1.content.count })",
+                        "消息条数": "\(trimmed.count)",
+                        "被压缩到": "\(summaryThrough)",
+                    ],
+                    toolNames: tools.names
+                )
+                trace.step(TraceStep(
+                    name: "组装提示词",
+                    detail: "system \(sections.count) 段 · 消息 \(trimmed.count) 条",
+                    meta: ["段": sections.map(\.title).joined(separator: "、")]
+                ))
+            }
+            let messages = [RequestMessage(role: .system, content: system)] + trimmed.map(RequestMessage.init)
             let chatRequest = ChatRequest(
                 model: model,
                 messages: messages,
@@ -249,6 +305,8 @@ public struct AgentRunner: Sendable {
             )
 
             var aggregate = StreamAggregator()
+            let clock = ContinuousClock()
+            let streamStart = clock.now
             for try await event in client.stream(chatRequest) {
                 aggregate.apply(event)
                 switch event {
@@ -259,6 +317,20 @@ public struct AgentRunner: Sendable {
                 case .toolCallDelta, .finish:
                     break
                 }
+            }
+            if let trace {
+                let elapsed = clock.now - streamStart
+                let ms = Double(elapsed.components.seconds) * 1000
+                    + Double(elapsed.components.attoseconds) / 1e15
+                trace.step(TraceStep(
+                    name: "模型请求 #\(requestIndex)",
+                    detail: model,
+                    durationMs: (ms * 10).rounded() / 10,
+                    meta: [
+                        "回答字符": "\(aggregate.text.count)",
+                        "工具调用": "\(aggregate.normalizedToolCalls().count)",
+                    ]
+                ))
             }
 
             let assistant = ChatMessage(
@@ -282,7 +354,8 @@ public struct AgentRunner: Sendable {
             for call in assistant.toolCalls {
                 try Task.checkCancellation()
                 let result = try await perform(
-                    call, agentID: agentID, sessionID: request.sessionID, approvals: approvals, into: out
+                    call, agentID: agentID, sessionID: request.sessionID, approvals: approvals,
+                    trace: trace, into: out
                 )
                 let toolMessage = ChatMessage(
                     role: .tool,
@@ -309,9 +382,11 @@ public struct AgentRunner: Sendable {
         agentID: String,
         sessionID: String,
         approvals: ApprovalMemory,
+        trace: TraceRecorder?,
         into out: AsyncStream<AgentEvent>.Continuation
     ) async throws -> ToolResult {
         guard let tool = tools[call.name] else {
+            trace?.step(TraceStep(name: "工具 · \(call.name)", detail: "未注册", status: "失败"))
             let text = "没有名为 \(call.name) 的工具。可用工具：\(tools.names.joined(separator: ", "))"
             out.yield(.toolFinished(callID: call.id, result: text, outcome: .error))
             return ToolResult(text: text, outcome: .error)
@@ -338,6 +413,7 @@ public struct AgentRunner: Sendable {
         }
 
         if decision == .deny {
+            trace?.step(TraceStep(name: "工具 · \(call.name)", detail: String(call.arguments.prefix(200)), status: "已拒绝"))
             out.yield(.toolFinished(callID: call.id, result: "已拒绝", outcome: .denied))
             return ToolResult(
                 text: "用户拒绝了这个操作。不要换一种方式重试，直接向用户说明情况。",
@@ -351,6 +427,8 @@ public struct AgentRunner: Sendable {
         }
 
         var result = ToolResult(text: "", outcome: .ok)
+        let clock = ContinuousClock()
+        let runStart = clock.now
         do {
             result.text = try await tool.run(arguments: call.arguments, context: context)
         } catch is CancellationError {
@@ -358,6 +436,24 @@ public struct AgentRunner: Sendable {
         } catch {
             result.text = "工具执行出错：\(error.localizedDescription)"
             result.outcome = .error
+        }
+        if let trace {
+            let elapsed = clock.now - runStart
+            let ms = Double(elapsed.components.seconds) * 1000
+                + Double(elapsed.components.attoseconds) / 1e15
+            trace.step(TraceStep(
+                name: "工具 · \(call.name)",
+                detail: String(call.arguments.prefix(200)),
+                durationMs: (ms * 10).rounded() / 10,
+                status: result.outcome == .ok ? "成功" : "出错"
+            ))
+            trace.appendToolCall(TraceToolCall(
+                name: call.name,
+                arguments: String(call.arguments.prefix(2000)),
+                durationMs: (ms * 10).rounded() / 10,
+                outcome: result.outcome == .ok ? "成功" : (result.outcome == .denied ? "已拒绝" : "出错"),
+                resultPreview: String(result.text.prefix(400))
+            ))
         }
         out.yield(.toolFinished(callID: call.id, result: result.text, outcome: result.outcome))
         return result
@@ -383,6 +479,14 @@ final class ApprovalMemory: @unchecked Sendable {
 }
 
 public enum SystemPrompt {
+    /// One block of the system prompt, with where it came from — the trace viewer shows
+    /// these so every part of the prompt can be traced back to its origin.
+    public struct Section: Codable, Hashable, Sendable {
+        public let title: String
+        public let source: String
+        public let text: String
+    }
+
     private static let rules = """
     ## 工作方式
     - 需要事实信息时先调用工具，不要凭空猜测。
@@ -391,37 +495,69 @@ public enum SystemPrompt {
     - 回答使用用户的语言，简洁直接。
     """
 
-    public static func make(
+    public static func sections(
         profile: AgentProfile,
         context: PromptContext,
         toolNames: [String],
         now: Date
-    ) -> String {
-        var sections = ["你是 \(profile.name)，运行在用户 Mac 上的个人助理 Agent。"]
+    ) -> [Section] {
+        var sections: [Section] = [
+            Section(
+                title: "身份",
+                source: "profile",
+                text: "你是 \(profile.name)，运行在用户 Mac 上的个人助理 Agent。"
+            )
+        ]
 
         let instructions = profile.instructions.trimmingCharacters(in: .whitespacesAndNewlines)
         if !instructions.isEmpty {
-            sections.append(instructions)
+            sections.append(Section(title: "人设指令", source: "agent.instructions", text: instructions))
         }
 
         if !context.environmentSummary.isEmpty {
             let stamp = now.formatted(
                 Date.FormatStyle(date: .abbreviated, time: .shortened, locale: Locale(identifier: "zh_CN"))
             )
-            sections.append("## 环境\n\(context.environmentSummary)\n- 当前时间：\(stamp) \(now.formatted(.dateTime.weekday(.wide)))")
+            sections.append(Section(
+                title: "环境",
+                source: "系统信息",
+                text: """
+                ## 环境
+                \(context.environmentSummary)
+                - 当前时间：\(stamp) \(now.formatted(.dateTime.weekday(.wide)))
+                """
+            ))
         }
         if !context.userProfile.isEmpty {
-            sections.append("## 关于用户\n\(context.userProfile)")
+            sections.append(Section(title: "关于用户", source: "USER.md", text: "## 关于用户\n\(context.userProfile)"))
         }
         if !context.memoryNotes.isEmpty {
-            sections.append("## 你的笔记\n\(context.memoryNotes)")
+            sections.append(Section(title: "你的笔记", source: "MEMORY.md", text: "## 你的笔记\n\(context.memoryNotes)"))
         }
         if !context.earlierSummary.isEmpty {
-            sections.append("## 更早的对话（摘要）\n\(context.earlierSummary)")
+            sections.append(Section(
+                title: "更早的对话（摘要）",
+                source: "sessions.summary",
+                text: "## 更早的对话（摘要）\n\(context.earlierSummary)"
+            ))
         }
-        sections.append(rules)
-        sections.append("## 可用工具\n\(toolNames.joined(separator: "、"))")
+        sections.append(Section(title: "工作方式", source: "内置规则", text: rules))
+        sections.append(Section(
+            title: "可用工具",
+            source: "ToolRegistry",
+            text: "## 可用工具\n\(toolNames.joined(separator: "、"))"
+        ))
+        return sections
+    }
 
-        return sections.joined(separator: "\n\n")
+    public static func make(
+        profile: AgentProfile,
+        context: PromptContext,
+        toolNames: [String],
+        now: Date
+    ) -> String {
+        sections(profile: profile, context: context, toolNames: toolNames, now: now)
+            .map(\.text)
+            .joined(separator: "\n\n")
     }
 }

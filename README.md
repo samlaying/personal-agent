@@ -53,6 +53,18 @@ scripts/release.sh --doctor   # 检查 Xcode / 证书 / 公证凭据
 - `~/Library/Application Support/PersonalAgent/memory.sqlite` — 会话与消息，FTS5 全文检索（中文按字索引，搜「世界」能命中「你好世界」）
 - 同目录 `USER.md` / `MEMORY.md` — 每次对话注入系统提示词；前者写你的偏好，后者是 Agent 通过 `remember` 写的笔记，随时可手改
 
+## 运行轨迹
+
+面板顶部的时间线按钮打开「运行轨迹」窗口。每一轮对话都落库（`turn_traces`），可以回看：
+
+- **调用链路**：载入历史 → 压缩摘要（触发时）→ 组装提示词 → 模型请求 → 每次工具调用，节点带耗时和状态
+- **提示词构成**：system 的每一段（身份 / 人设指令 / 环境 / 关于用户 / 你的笔记 / 更早的对话摘要 / 工作方式 / 可用工具），标明来源（`USER.md`、`MEMORY.md`、`sessions.summary`…）和字数，点开看原文
+- **发送的消息序列**：裁剪后的 messages，带角色、seq、字数；被截断的会标注
+- **工具调用**：参数、耗时、结果预览
+- 右上角可切「原始 JSON」
+
+超预算时的摘要压缩也会作为一步出现在链路里，被压缩到哪条（`summary_through_seq`）记录在预算信息中。
+
 ## 架构
 
 ```

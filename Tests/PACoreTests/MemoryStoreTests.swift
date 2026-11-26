@@ -189,6 +189,33 @@ struct ConversationSummaryStoreTests {
     }
 
     /// A database created before summaries existed must gain the columns in place.
+    @Test func traceRoundTrip() async throws {
+        let store = try MemoryStore(url: FileManager.default.temporaryDirectory
+            .appendingPathComponent("pa-tests-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("memory.sqlite"))
+        let session = try await store.createSession(principalID: "assistant")
+
+        var payload = TracePayload(route: "agent", model: "mock-model", temperature: 0.3)
+        payload.steps = [TraceStep(name: "载入历史", detail: "2 条", durationMs: 1.5)]
+        payload.systemSections = [TraceSection(title: "身份", source: "profile", text: "你是助理")]
+        payload.messages = [TraceMessage(role: "user", seq: 0, text: "你好")]
+        payload.budget = ["预算字符": "60000"]
+        try await store.saveTrace(payload, sessionID: session.id)
+
+        let summaries = try await store.traceSummaries(in: session.id)
+        #expect(summaries.count == 1)
+        #expect(summaries[0].model == "mock-model")
+        #expect(summaries[0].route == "agent")
+        #expect(summaries[0].promptChars == 6)   // 你好(2) + 身份段(4)
+
+        let loaded = try await store.tracePayload(id: summaries[0].id)
+        #expect(loaded == payload)
+
+        // 删除会话连轨迹一起删
+        try await store.deleteSession(session.id)
+        #expect(try await store.traceSummaries(in: session.id).isEmpty)
+    }
+
     @Test func legacyDatabaseIsMigrated() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("pa-legacy-\(UUID().uuidString)", isDirectory: true)
