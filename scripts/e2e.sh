@@ -17,6 +17,14 @@ trap 'kill $MOCK_PID 2>/dev/null; true' EXIT
 sleep 1
 echo "==> mock provider: $(cat /tmp/pa-mock.log)"
 
+# 暂改 provider 指向 mock；结束后恢复原值，不碰用户其它设置
+OLD_BASE=$(defaults read $BUNDLE_ID provider.baseURL 2>/dev/null || true)
+OLD_MODEL=$(defaults read $BUNDLE_ID provider.model 2>/dev/null || true)
+restore_provider() {
+  if [[ -n "$OLD_BASE" ]]; then defaults write $BUNDLE_ID provider.baseURL "$OLD_BASE"; else defaults delete $BUNDLE_ID provider.baseURL 2>/dev/null || true; fi
+  if [[ -n "$OLD_MODEL" ]]; then defaults write $BUNDLE_ID provider.model "$OLD_MODEL"; else defaults delete $BUNDLE_ID provider.model 2>/dev/null || true; fi
+}
+restore_provider
 defaults write $BUNDLE_ID provider.baseURL "http://127.0.0.1:$PORT/v1"
 defaults write $BUNDLE_ID provider.model "mock-model"
 
@@ -31,7 +39,7 @@ done
 sleep 4
 if [[ -z "$APP_PID" ]]; then
     echo "FAIL: app process not found"
-    defaults delete $BUNDLE_ID 2>/dev/null || true
+    restore_provider
     exit 1
 fi
 
@@ -53,5 +61,5 @@ echo "==> still running: $(ps -p "$APP_PID" > /dev/null && echo yes || echo no)"
 
 kill "$APP_PID" 2>/dev/null || true
 sleep 1
-defaults delete $BUNDLE_ID 2>/dev/null || true
-echo "==> done"
+restore_provider
+echo "==> done（provider 设置已恢复原值）"
