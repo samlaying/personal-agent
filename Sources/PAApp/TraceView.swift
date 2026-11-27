@@ -20,12 +20,33 @@ struct TraceView: View {
     /// 链路列宽度，分隔条可拖拽调整。
     @State private var chainWidth: CGFloat = 430
     @State private var chainDragStart: CGFloat?
+    /// 「本轮次」列表宽度，同样可拖拽。
+    @State private var listWidth: CGFloat = 280
+    @State private var listDragStart: CGFloat?
 
     var body: some View {
+        GeometryReader { outerGeo in
         HStack(spacing: 0) {
             turnList
-            Divider()
+                .frame(width: min(max(200, listWidth), max(200, outerGeo.size.width - 560)))
+            // 这根分隔线同样可拖拽
+            Rectangle()
+                .fill(Color.clear)
+                .frame(width: 7)
+                .overlay(Divider())
+                .contentShape(Rectangle())
+                .onHover { hovering in
+                    if hovering { NSCursor.resizeLeftRight.set() } else { NSCursor.pop() }
+                }
+                .gesture(DragGesture(minimumDistance: 1)
+                    .onChanged { value in
+                        if listDragStart == nil { listDragStart = listWidth }
+                        listWidth = min(max(200, (listDragStart ?? 280) + value.translation.width),
+                                        max(200, outerGeo.size.width - 560))
+                    }
+                    .onEnded { _ in listDragStart = nil })
             detail
+        }
         }
         .background(.background)
         .frame(minWidth: 960, minHeight: 600)
