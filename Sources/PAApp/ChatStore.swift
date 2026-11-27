@@ -246,32 +246,27 @@ final class ChatStore {
                 self.lastError = "保存消息失败：\(error.localizedDescription)"
             }
 
-            let isSecond = settings.answerRoute == .second
             let recorder = TraceRecorder(
-                route: isSecond ? "second" : "agent",
-                model: isSecond ? settings.secondModel : (agent.model ?? settings.model),
+                route: "agent",
+                model: agent.model ?? settings.model,
                 temperature: settings.temperature
             )
 
-            if isSecond {
-                await self.answerViaSecondChannel(text, settings: settings, agent: agent, trace: recorder)
-            } else {
-                // The runner trims to a character budget anyway; hand it a bounded window.
-                let history = ((try? await self.store.recentMessages(in: sessionID, limit: 400)) ?? []).dropLast()
-                let request = RunRequest(
-                    profile: agent,
-                    history: Array(history),
-                    input: text,
-                    sessionID: sessionID,
-                    preApprovedTools: self.preApprovedTools,
-                    summary: self.currentSummary,
-                    trace: recorder
-                )
+            // The runner trims to a character budget anyway; hand it a bounded window.
+            let history = ((try? await self.store.recentMessages(in: sessionID, limit: 400)) ?? []).dropLast()
+            let request = RunRequest(
+                profile: agent,
+                history: Array(history),
+                input: text,
+                sessionID: sessionID,
+                preApprovedTools: self.preApprovedTools,
+                summary: self.currentSummary,
+                trace: recorder
+            )
 
-                for await event in runner.events(for: request) {
-                    if Task.isCancelled { break }
-                    self.handle(event)
-                }
+            for await event in runner.events(for: request) {
+                if Task.isCancelled { break }
+                self.handle(event)
             }
             await self.saveTrace(recorder, sessionID: sessionID)
             self.phase = .idle
@@ -300,143 +295,6 @@ final class ChatStore {
 
     func loadTrace(id: String) async -> TracePayload? {
         try? await store.tracePayload(id: id)
-    }
-
-    // MARK: Second channel
-
-    /// One question in, one answer out: no tools, no history replay. The main model may first
-    /// condense the message and the session summary into notes for it to read.
-    private func answerViaSecondChannel(
-        _ text: String, settings: AppSettings.Snapshot, agent: AgentProfile, trace: TraceRecorder
-    ) async {
-        var context = currentSummary?.text ?? ""
-        trace.step(TraceStep(
-            name: "载入历史",
-            detail: context.isEmpty ? "无摘要" : "摘要 \(context.count) 字",
-            meta: ["路由": "second", "模型": settings.secondModel]
-        ))
-
-        if settings.preprocessWithMain {
-            note = "主模型整理中…"
-            if let organized = try? await tracedOrganize(text, summary: context, settings: settings, agent: agent, trace: trace),
-               !organized.isEmpty {
-                context = organized
-            }
-        }
-        guard !Task.isCancelled else { return }
-
-        note = "第二通道回答中…"
-        let channel = AnswerChannel()
-        let prompt = channel.prompt(question: text, context: context)
-        trace.setPrompt(
-            sections: [TraceSection(title: "回答指令", source: "AnswerChannel.instruction", text: channel.instruction)],
-            messages: [
-                TraceMessage(role: "system", text: channel.instruction),
-                TraceMessage(role: "user", text: prompt),
-            ],
-            budget: ["输入字符": "\(prompt.count)"],
-            toolNames: []
-        )
-
-        let client = OpenAICompatibleClient(baseURL: settings.secondBaseURL, apiKey: settings.secondKey)
-        let request = channel.request(
-            model: settings.secondModel,
-            prompt: prompt,
-            temperature: settings.temperature
-        )
-
-        var answer = ""
-        let clock = ContinuousClock()
-        let streamStart = clock.now
-        do {
-            for try await event in client.stream(request) {
-                if Task.isCancelled { return }
-                guard case .textDelta(let fragment) = event else { continue }
-                answer += fragment
-                appendAssistantDelta(fragment)
-                phase = .streaming
-            }
-        } catch is CancellationError {
-            return
-        } catch {
-            lastError = "第二通道请求失败：\(error.localizedDescription)"
-        }
-        let elapsed = clock.now - streamStart
-        let ms = Double(elapsed.components.seconds) * 1000 + Double(elapsed.components.attoseconds) / 1e15
-        trace.step(TraceStep(
-            name: "模型请求",
-            detail: settings.secondModel,
-            durationMs: (ms * 10).rounded() / 10,
-            meta: ["回答字符": "\(answer.count)"]
-        ))
-
-        note = nil
-        if let last = items.last, last.isStreaming {
-            items[items.count - 1].isStreaming = false
-        }
-        guard !answer.isEmpty else { return }
-        persist(ChatMessage(
-            id: UUID().uuidString,
-            seq: 0,
-            role: .assistant,
-            author: .agent(agent.id),
-            content: answer
-        ))
-    }
-
-    /// The main model reads the message and the running summary, and returns notes for the
-    /// second channel — it does not answer the question itself.
-    /// Manual timing: the closure captures the main-actor `self`, so `trace.span` (which is
-    /// nonisolated) would trip Swift 6 sending checks.
-    private func tracedOrganize(
-        _ text: String, summary: String, settings: AppSettings.Snapshot, agent: AgentProfile, trace: TraceRecorder
-    ) async throws -> String {
-        let clock = ContinuousClock()
-        let start = clock.now
-        let notes = try await organize(text, summary: summary, settings: settings, agent: agent)
-        let elapsed = clock.now - start
-        let ms = Double(elapsed.components.seconds) * 1000 + Double(elapsed.components.attoseconds) / 1e15
-        trace.step(TraceStep(
-            name: "主模型整理",
-            detail: "把最后一句话整理成任务描述",
-            durationMs: (ms * 10).rounded() / 10,
-            meta: ["整理后": "\(notes.count) 字"]
-        ))
-        return notes
-    }
-
-    private func organize(
-        _ text: String, summary: String, settings: AppSettings.Snapshot, agent: AgentProfile
-    ) async throws -> String {
-        let channel = AnswerChannel(instruction: """
-        你在为另一个模型准备材料：把用户这一句话整理成清晰完整的问题，必要时补上背景，不要自己回答。
-        只输出整理后的内容。
-        """)
-        let prompt = channel.prompt(question: text, context: summary)
-        let client = OpenAICompatibleClient(baseURL: settings.baseURL, apiKey: settings.modelKey)
-        let request = channel.request(
-            model: agent.model ?? settings.model,
-            prompt: prompt,
-            temperature: 0.2
-        )
-        var notes = ""
-        for try await event in client.stream(request) {
-            if case .textDelta(let fragment) = event { notes += fragment }
-        }
-        return notes.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private func appendAssistantDelta(_ fragment: String) {
-        if let last = items.last, last.isStreaming, case .assistant = last.kind {
-            items[items.count - 1].content = .text(last.text + fragment)
-        } else {
-            items.append(DisplayItem(
-                id: UUID().uuidString,
-                kind: .assistant,
-                content: .text(fragment),
-                isStreaming: true
-            ))
-        }
     }
 
     func cancel() {

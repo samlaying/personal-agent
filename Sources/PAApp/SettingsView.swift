@@ -7,7 +7,6 @@ struct SettingsView: View {
 
     @AppStorage("settings.modelKeyDraft") private var modelKeyDraft = ""
     @AppStorage("settings.tavilyKeyDraft") private var tavilyKeyDraft = ""
-    @AppStorage("settings.secondKeyDraft") private var secondKeyDraft = ""
 
     var body: some View {
         @Bindable var settings = settings
@@ -27,26 +26,6 @@ struct SettingsView: View {
                             set: { settings.temperature = $0 }
                         ), in: 0...2, step: 0.1)
                     }
-                }
-            }
-
-            Section("回答通道") {
-                Picker("最终答案由谁给出", selection: $settings.answerRoute) {
-                    ForEach(AnswerRoute.allCases, id: \.self) { route in
-                        Text(route.label).tag(route)
-                    }
-                }
-                if settings.answerRoute == .second {
-                    TextField("Base URL", text: $settings.secondBaseURL)
-                    TextField("模型", text: $settings.secondModel)
-                    SecureField(
-                        settings.hasSecondKey ? "API Key（已保存，留空保持不变）" : "API Key",
-                        text: $secondKeyDraft
-                    )
-                    Toggle("先让主模型整理一遍再交给它", isOn: $settings.preprocessWithMain)
-                    Text("第二通道只做一次问答：只收到最后一条消息（可先由主模型整理，带上会话摘要），也只回文字，不带工具与历史。")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                 }
             }
 
@@ -139,10 +118,6 @@ struct SettingsView: View {
         if !tavilyKeyDraft.isEmpty {
             settings.tavilyKey = tavilyKeyDraft
             tavilyKeyDraft = ""
-        }
-        if !secondKeyDraft.isEmpty {
-            settings.applySecondKey(secondKeyDraft)
-            secondKeyDraft = ""
         }
     }
 }
