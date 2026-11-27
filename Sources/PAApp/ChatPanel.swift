@@ -53,6 +53,8 @@ final class ChatPanelController {
         panel.level = .normal
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.hidesOnDeactivate = true
+        // 顶部隐藏的标题栏太隐蔽：拖动面板任意空白处都能移动它。
+        panel.isMovableByWindowBackground = true
         panel.isReleasedWhenClosed = false
         panel.minSize = NSSize(width: 620, height: 480)
         panel.contentView = content

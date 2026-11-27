@@ -1,3 +1,4 @@
+import AppKit
 import Observation
 import PACore
 import SwiftUI
@@ -16,6 +17,9 @@ struct TraceView: View {
     @State private var selectedStep: Int?
     @State private var selectedSectionID: String?
     @State private var selectedMessageID: String?
+    /// 链路列宽度，分隔条可拖拽调整。
+    @State private var chainWidth: CGFloat = 430
+    @State private var chainDragStart: CGFloat?
 
     var body: some View {
         HStack(spacing: 0) {
@@ -142,6 +146,7 @@ struct TraceView: View {
             Divider()
 
             if let payload {
+                GeometryReader { geo in
                 HStack(spacing: 0) {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 0) {
@@ -149,8 +154,22 @@ struct TraceView: View {
                         }
                         .padding(12)
                     }
-                    .frame(width: 430)
-                    Divider()
+                    .frame(width: min(max(320, chainWidth), max(320, geo.size.width - 300)))
+                    // 分隔条：拖拽调整左右宽度
+                    Rectangle()
+                        .fill(Color.clear)
+                        .frame(width: 6)
+                        .contentShape(Rectangle())
+                        .onHover { hovering in
+                            if hovering { NSCursor.resizeLeftRight.set() } else { NSCursor.pop() }
+                        }
+                        .gesture(DragGesture(minimumDistance: 1)
+                            .onChanged { value in
+                                if chainDragStart == nil { chainDragStart = chainWidth }
+                                chainWidth = min(max(320, (chainDragStart ?? 430) + value.translation.width),
+                                                 max(320, geo.size.width - 300))
+                            }
+                            .onEnded { _ in chainDragStart = nil })
                     ScrollView {
                         VStack(alignment: .leading, spacing: 12) {
                             if showRaw {
@@ -169,6 +188,7 @@ struct TraceView: View {
                         .padding(12)
                     }
                     .frame(maxWidth: .infinity)
+                }
                 }
             } else {
                 Text(loading ? "加载中…" : "选择左边的一轮，看它每一步做了什么")

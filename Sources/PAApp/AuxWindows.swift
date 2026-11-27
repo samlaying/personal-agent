@@ -54,6 +54,7 @@ final class TraceWindowController {
             window.title = "运行轨迹"
             window.contentView = NSHostingView(rootView: TraceView().environment(ChatStore.shared))
             window.isReleasedWhenClosed = false
+            window.isMovableByWindowBackground = true
             window.center()
             self.window = window
         }
