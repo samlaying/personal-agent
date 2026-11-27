@@ -7,17 +7,37 @@ public struct PromptContext: Sendable, Hashable {
     public var environmentSummary: String
     /// Gist of turns that have already been compressed out of the transcript.
     public var earlierSummary: String
+    /// Provenance for the trace viewer: where each dynamic piece came from.
+    public var userProfileOrigin: String
+    public var memoryNotesOrigin: String
+    public var earlierSummaryOrigin: String
+    /// Which rule produced/transformed it, shown next to the origin.
+    public var userProfileRule: String
+    public var memoryNotesRule: String
+    public var earlierSummaryRule: String
 
     public init(
         userProfile: String = "",
         memoryNotes: String = "",
         environmentSummary: String = "",
-        earlierSummary: String = ""
+        earlierSummary: String = "",
+        userProfileOrigin: String = "USER.md",
+        memoryNotesOrigin: String = "MEMORY.md",
+        earlierSummaryOrigin: String = "sessions.summary",
+        userProfileRule: String = "MemoryFiles.promptSnippet：去注释、去标题，上限 4000 字",
+        memoryNotesRule: String = "MemoryFiles.promptSnippet：去注释、去标题，上限 4000 字",
+        earlierSummaryRule: String = "ContextSummarizer：≤800 字，保留事实、决定、偏好、未完成任务"
     ) {
         self.userProfile = userProfile
         self.memoryNotes = memoryNotes
         self.environmentSummary = environmentSummary
         self.earlierSummary = earlierSummary
+        self.userProfileOrigin = userProfileOrigin
+        self.memoryNotesOrigin = memoryNotesOrigin
+        self.earlierSummaryOrigin = earlierSummaryOrigin
+        self.userProfileRule = userProfileRule
+        self.memoryNotesRule = memoryNotesRule
+        self.earlierSummaryRule = earlierSummaryRule
     }
 }
 
@@ -273,13 +293,21 @@ public struct AgentRunner: Sendable {
             let trimmed = TranscriptBuilder.trim(transcript, budgetChars: transcriptBudgetChars)
             if let trace {
                 trace.setPrompt(
-                    sections: sections.map { TraceSection(title: $0.title, source: $0.source, text: $0.text) },
-                    messages: trimmed.map {
+                    sections: sections.map {
+                        TraceSection(
+                            id: $0.id, title: $0.title, source: $0.source,
+                            origin: $0.origin, rule: $0.rule, text: $0.text
+                        )
+                    },
+                    messages: trimmed.enumerated().map { index, message in
                         TraceMessage(
-                            role: $0.role.rawValue,
-                            name: $0.name,
-                            seq: $0.seq,
-                            text: $0.role == .tool ? "[工具结果] " + $0.content : $0.content
+                            id: "M\(index + 1)",
+                            role: message.role.rawValue,
+                            name: message.name,
+                            seq: message.seq,
+                            text: message.role == .tool ? "[工具结果] " + message.content : message.content,
+                            origin: "messages 表 seq=\(message.seq)",
+                            rule: "TranscriptBuilder.trim：预算 \(transcriptBudgetChars) 字符，从最新往回累加"
                         )
                     },
                     budget: [
@@ -482,8 +510,14 @@ public enum SystemPrompt {
     /// One block of the system prompt, with where it came from — the trace viewer shows
     /// these so every part of the prompt can be traced back to its origin.
     public struct Section: Codable, Hashable, Sendable {
+        /// Stable block id shown in the trace viewer (S1, S2, …).
+        public let id: String
         public let title: String
         public let source: String
+        /// Where the content came from (file, table, rule name).
+        public let origin: String
+        /// Which rule assembled or transformed it.
+        public let rule: String
         public let text: String
     }
 
@@ -503,15 +537,26 @@ public enum SystemPrompt {
     ) -> [Section] {
         var sections: [Section] = [
             Section(
+                id: "S1",
                 title: "身份",
                 source: "profile",
+                origin: "AgentProfile（agents 表）",
+                rule: "每轮固定注入",
                 text: "你是 \(profile.name)，运行在用户 Mac 上的个人助理 Agent。"
             )
         ]
+        func nextID() -> String { "S\(sections.count + 1)" }
 
         let instructions = profile.instructions.trimmingCharacters(in: .whitespacesAndNewlines)
         if !instructions.isEmpty {
-            sections.append(Section(title: "人设指令", source: "agent.instructions", text: instructions))
+            sections.append(Section(
+                id: nextID(),
+                title: "人设指令",
+                source: "agent.instructions",
+                origin: "AgentProfile.instructions（agents 表）",
+                rule: "设置 → Agent 编辑页填写，原文注入",
+                text: instructions
+            ))
         }
 
         if !context.environmentSummary.isEmpty {
@@ -519,8 +564,11 @@ public enum SystemPrompt {
                 Date.FormatStyle(date: .abbreviated, time: .shortened, locale: Locale(identifier: "zh_CN"))
             )
             sections.append(Section(
+                id: nextID(),
                 title: "环境",
                 source: "系统信息",
+                origin: "ProcessInfo + 系统时钟",
+                rule: "每轮重新生成，时间精确到分钟",
                 text: """
                 ## 环境
                 \(context.environmentSummary)
@@ -529,22 +577,49 @@ public enum SystemPrompt {
             ))
         }
         if !context.userProfile.isEmpty {
-            sections.append(Section(title: "关于用户", source: "USER.md", text: "## 关于用户\n\(context.userProfile)"))
+            sections.append(Section(
+                id: nextID(),
+                title: "关于用户",
+                source: "USER.md",
+                origin: context.userProfileOrigin,
+                rule: context.userProfileRule,
+                text: "## 关于用户\n\(context.userProfile)"
+            ))
         }
         if !context.memoryNotes.isEmpty {
-            sections.append(Section(title: "你的笔记", source: "MEMORY.md", text: "## 你的笔记\n\(context.memoryNotes)"))
+            sections.append(Section(
+                id: nextID(),
+                title: "你的笔记",
+                source: "MEMORY.md",
+                origin: context.memoryNotesOrigin,
+                rule: context.memoryNotesRule,
+                text: "## 你的笔记\n\(context.memoryNotes)"
+            ))
         }
         if !context.earlierSummary.isEmpty {
             sections.append(Section(
+                id: nextID(),
                 title: "更早的对话（摘要）",
                 source: "sessions.summary",
+                origin: context.earlierSummaryOrigin,
+                rule: context.earlierSummaryRule,
                 text: "## 更早的对话（摘要）\n\(context.earlierSummary)"
             ))
         }
-        sections.append(Section(title: "工作方式", source: "内置规则", text: rules))
         sections.append(Section(
+            id: nextID(),
+            title: "工作方式",
+            source: "内置规则",
+            origin: "SystemPrompt.rules（硬编码）",
+            rule: "每轮固定注入",
+            text: rules
+        ))
+        sections.append(Section(
+            id: nextID(),
             title: "可用工具",
             source: "ToolRegistry",
+            origin: "ToolRegistry.names（注册顺序）",
+            rule: "schema 随请求单独发送，这里只报名字",
             text: "## 可用工具\n\(toolNames.joined(separator: "、"))"
         ))
         return sections

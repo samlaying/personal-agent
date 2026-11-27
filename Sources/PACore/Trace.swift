@@ -19,26 +19,54 @@ public struct TraceStep: Codable, Hashable, Sendable {
 
 /// A piece of the system prompt, with where it came from.
 public struct TraceSection: Codable, Hashable, Sendable {
+    public var id: String
     public var title: String
     public var source: String
+    public var origin: String
+    public var rule: String
     public var text: String
 
-    public init(title: String, source: String, text: String) {
+    public init(
+        id: String = "",
+        title: String,
+        source: String,
+        origin: String = "",
+        rule: String = "",
+        text: String
+    ) {
+        self.id = id
         self.title = title
         self.source = source
+        self.origin = origin
+        self.rule = rule
         self.text = text
     }
 }
 
 public struct TraceMessage: Codable, Hashable, Sendable {
+    public var id: String
     public var role: String
     public var name: String?
     public var seq: Int?
     public var chars: Int
     public var text: String
     public var truncated: Bool
+    /// Where this message came from (table + seq, this turn's input, tool result…).
+    public var origin: String
+    /// Which windowing rule kept it in the request.
+    public var rule: String
 
-    public init(role: String, name: String? = nil, seq: Int? = nil, text: String, cap: Int = 4000) {
+    public init(
+        id: String = "",
+        role: String,
+        name: String? = nil,
+        seq: Int? = nil,
+        text: String,
+        cap: Int = 4000,
+        origin: String = "",
+        rule: String = ""
+    ) {
+        self.id = id
         self.role = role
         self.name = name
         self.seq = seq
@@ -46,6 +74,8 @@ public struct TraceMessage: Codable, Hashable, Sendable {
         let cut = text.count > cap
         self.text = cut ? String(text.suffix(cap)) : text
         self.truncated = cut
+        self.origin = origin
+        self.rule = rule
     }
 }
 
@@ -106,9 +136,11 @@ public struct TracePayload: Codable, Hashable, Sendable {
     }
 }
 
-/// Row summary for the trace list.
+/// Row summary for the trace list (all sessions, newest first).
 public struct TraceSummary: Codable, Hashable, Sendable {
     public var id: String
+    public var sessionID: String
+    public var sessionTitle: String
     public var createdAt: Date
     public var model: String
     public var route: String

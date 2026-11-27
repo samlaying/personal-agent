@@ -235,14 +235,18 @@ struct AgentTraceTests {
         #expect(names.contains("模型请求 #2"))
         #expect(names.contains("工具 · echo"))
 
-        // Prompt composition: identity first, sources attached, summary absent.
+        // Prompt composition: identity first, sources attached, provenance filled in.
         #expect(payload.systemSections.first?.title == "身份")
+        #expect(payload.systemSections.first?.id == "S1")
         #expect(payload.systemSections.contains { $0.source == "USER.md" && $0.text.contains("喜欢简洁") })
+        #expect(payload.systemSections.allSatisfy { !$0.origin.isEmpty && !$0.rule.isEmpty })
         #expect(payload.systemSections.contains { $0.source == "ToolRegistry" })
         // The transcript never contains system (it is separate) and the final assembly
         // happens after the tool exchange, so it ends with the tool result.
         #expect(payload.messages.first?.role == "user")
+        #expect(payload.messages.first?.id == "M1")
         #expect(payload.messages.last?.role == "tool")
+        #expect(payload.messages.allSatisfy { $0.origin.contains("seq=") })
 
         // Tool call card got its result preview.
         #expect(payload.toolCalls.count == 1)

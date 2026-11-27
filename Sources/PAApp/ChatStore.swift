@@ -51,6 +51,8 @@ final class ChatStore {
     var showSidebar = true
     /// Older messages live behind this flag instead of being loaded up front.
     private(set) var hasEarlierMessages = false
+    /// Bumped after every saved trace so the trace window can refresh itself.
+    private(set) var traceVersion = 0
 
     func report(_ text: String?) {
         lastError = text
@@ -283,14 +285,14 @@ final class ChatStore {
         let payload = recorder.finish()
         do {
             try await store.saveTrace(payload, sessionID: sessionID)
+            traceVersion += 1
         } catch {
             lastError = "保存轨迹失败：\(error.localizedDescription)"
         }
     }
 
     func loadTraces() async -> [TraceSummary] {
-        guard let sessionID = session?.id else { return [] }
-        return (try? await store.traceSummaries(in: sessionID, limit: 30)) ?? []
+        (try? await store.traceSummaries(limit: 50)) ?? []
     }
 
     func loadTrace(id: String) async -> TracePayload? {
@@ -347,7 +349,10 @@ final class ChatStore {
         PromptContext(
             userProfile: MemoryFiles.promptSnippet(MemoryFiles.read(MemoryFiles.userProfile, in: dataDirectory)),
             memoryNotes: MemoryFiles.promptSnippet(MemoryFiles.read(MemoryFiles.notes, in: dataDirectory)),
-            environmentSummary: "macOS \(ProcessInfo.processInfo.operatingSystemVersionString)"
+            environmentSummary: "macOS \(ProcessInfo.processInfo.operatingSystemVersionString)",
+            userProfileOrigin: MemoryFiles.url(for: MemoryFiles.userProfile, in: dataDirectory).path,
+            memoryNotesOrigin: MemoryFiles.url(for: MemoryFiles.notes, in: dataDirectory).path,
+            earlierSummaryOrigin: "sessions.summary（已压缩到 seq \(currentSummary?.throughSeq ?? 0)）"
         )
     }
 

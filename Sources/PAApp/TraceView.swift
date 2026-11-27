@@ -10,8 +10,12 @@ struct TraceView: View {
     @State private var traces: [TraceSummary] = []
     @State private var selectedID: String?
     @State private var payload: TracePayload?
-    @State private var showRaw = false
     @State private var loading = false
+    @State private var showRaw = false
+    /// Index into `payload.steps` whose details are shown in the side panel.
+    @State private var selectedStep: Int?
+    @State private var selectedSectionID: String?
+    @State private var selectedMessageID: String?
 
     var body: some View {
         HStack(spacing: 0) {
@@ -22,10 +26,11 @@ struct TraceView: View {
         .background(.background)
         .frame(minWidth: 960, minHeight: 600)
         .task { await reload() }
-        // The window can be opened before the session finishes loading; catch up when it does.
+        // 新轨迹落库、切换会话时自动刷新（窗口可能在会话加载完成前就打开了）。
+        .onChange(of: store.traceVersion) { _, _ in
+            Task { await reload(selectLatest: true) }
+        }
         .onChange(of: store.session?.id) { _, _ in
-            selectedID = nil
-            payload = nil
             Task { await reload() }
         }
     }
@@ -81,9 +86,13 @@ struct TraceView: View {
                     Spacer()
                     Text(Self.time(summary.createdAt)).font(.system(size: 10)).foregroundStyle(.secondary)
                 }
-                Text("\(Int(summary.durationMs)) ms · 提示词 \(summary.promptChars) 字")
+                Text(summary.sessionTitle.isEmpty ? "未命名会话" : summary.sessionTitle)
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Text("\(Int(summary.durationMs)) ms · 提示词 \(summary.promptChars) 字")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
@@ -111,16 +120,21 @@ struct TraceView: View {
     private var detail: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("调用链路").font(.system(size: 14, weight: .semibold))
+                Text("运行轨迹").font(.system(size: 14, weight: .semibold))
                 if let payload {
                     Text("· \(Int(payload.durationMs)) ms")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
-                Toggle("原始 JSON", isOn: $showRaw)
-                    .toggleStyle(.checkbox)
-                    .font(.caption)
-                    .controlSize(.small)
+                Button {
+                    showRaw.toggle()
+                } label: {
+                    Image(systemName: showRaw ? "doc.text" : "curlybraces")
+                        .font(.system(size: 12))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(showRaw ? Color.accentColor : Color.secondary)
+                .help(showRaw ? "回到链路视图" : "查看原始 JSON")
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
@@ -128,24 +142,33 @@ struct TraceView: View {
             Divider()
 
             if let payload {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 18) {
-                        if showRaw {
-                            rawJSON(payload)
-                        } else {
-                            chain(payload.steps)
-                            if !payload.systemSections.isEmpty {
-                                promptComposition(payload)
-                            }
-                            if !payload.messages.isEmpty {
-                                messageSequence(payload)
-                            }
-                            if !payload.toolCalls.isEmpty {
-                                toolCalls(payload)
+                HStack(spacing: 0) {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 0) {
+                            chain(payload, selectedStep: selectedStep) { selectedStep = $0 }
+                        }
+                        .padding(12)
+                    }
+                    .frame(width: 430)
+                    Divider()
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 12) {
+                            if showRaw {
+                                rawJSON(payload)
+                            } else if let index = selectedStep, index < payload.steps.count {
+                                stepDetails(payload, step: payload.steps[index])
+                            } else {
+                                Text("点击左侧任意步骤，这里展开它的细节：\n· 组装提示词 → 完整 system + 每段来源\n· 模型请求 → 模型与产出\n· 工具 → 参数与结果")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineSpacing(4)
+                                    .frame(maxWidth: .infinity, alignment: .center)
+                                    .padding(.top, 80)
                             }
                         }
+                        .padding(12)
                     }
-                    .padding(14)
+                    .frame(maxWidth: .infinity)
                 }
             } else {
                 Text(loading ? "加载中…" : "选择左边的一轮，看它每一步做了什么")
@@ -159,15 +182,18 @@ struct TraceView: View {
 
     // MARK: Timeline
 
-    private func chain(_ steps: [TraceStep]) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
+    private func chain(_ payload: TracePayload, selectedStep: Int?, onTap: @escaping (Int?) -> Void) -> some View {
+        let steps = payload.steps
+        return VStack(alignment: .leading, spacing: 0) {
             Text("系统做了什么").font(.system(size: 12, weight: .semibold)).padding(.bottom, 8)
             ForEach(Array(steps.enumerated()), id: \.offset) { index, step in
-                node(step)
+                node(step, selected: index == selectedStep) {
+                    onTap(selectedStep == index ? nil : index)
+                }
                 if index < steps.count - 1 {
                     Rectangle()
                         .fill(Color.secondary.opacity(0.3))
-                        .frame(width: 1.5, height: 14)
+                        .frame(width: 1.5, height: 12)
                         .padding(.leading, 14)
                 }
             }
@@ -177,23 +203,63 @@ struct TraceView: View {
         }
     }
 
-    private func node(_ step: TraceStep) -> some View {
-        HStack(alignment: .top, spacing: 8) {
+    // MARK: 步骤类型与颜色
+
+    private enum StepKind {
+        case context, prompt, summary, model, tool
+    }
+
+    private func kind(_ step: TraceStep) -> StepKind {
+        if step.name.hasPrefix("模型请求") { return .model }
+        if step.name.hasPrefix("工具") { return .tool }
+        if step.name == "压缩摘要" { return .summary }
+        if step.name == "组装提示词" { return .prompt }
+        return .context
+    }
+
+    private func kindColor(_ kind: StepKind) -> Color {
+        switch kind {
+        case .context: Color.blue
+        case .prompt: Color.indigo
+        case .summary: Color.purple
+        case .model: Color.green
+        case .tool: Color.orange
+        }
+    }
+
+    private func kindName(_ kind: StepKind) -> String {
+        switch kind {
+        case .context: "上下文"
+        case .prompt: "提示词"
+        case .summary: "摘要"
+        case .model: "模型"
+        case .tool: "工具"
+        }
+    }
+
+    private func node(_ step: TraceStep, selected: Bool, onTap: @escaping () -> Void) -> some View {
+        let kind = kind(step)
+        let color = kindColor(kind)
+        return HStack(alignment: .top, spacing: 8) {
             Circle()
-                .fill(statusColor(step.status))
+                .fill(step.status == "成功" ? color : statusColor(step.status))
                 .frame(width: 8, height: 8)
-                .padding(.top, 6)
+                .padding(.top, 7)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 8) {
                     Text(step.name).font(.system(size: 12, weight: .medium))
+                    Text(kindName(kind))
+                        .font(.system(size: 8, weight: .semibold))
+                        .padding(.horizontal, 5).padding(.vertical, 1.5)
+                        .background(color.opacity(0.14), in: Capsule())
+                        .foregroundStyle(color)
                     if step.durationMs > 0 {
                         Text("\(Int(step.durationMs)) ms")
                             .font(.system(size: 10)).foregroundStyle(.secondary)
                     }
-                    Text(step.status)
-                        .font(.system(size: 9))
-                        .foregroundStyle(statusColor(step.status))
-                        .opacity(step.status == "成功" ? 0.55 : 1)
+                    if step.status != "成功" {
+                        Text(step.status).font(.system(size: 9)).foregroundStyle(statusColor(step.status))
+                    }
                 }
                 if !step.detail.isEmpty {
                     Text(step.detail)
@@ -205,13 +271,27 @@ struct TraceView: View {
                     Text(step.meta.map { "\($0.key) \($0.value)" }.sorted().joined(separator: " · "))
                         .font(.system(size: 10))
                         .foregroundStyle(.tertiary)
+                        .lineLimit(2)
                 }
             }
-            .padding(.horizontal, 10)
+            .padding(.leading, 8)
+            .padding(.trailing, 8)
             .padding(.vertical, 6)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 8))
+            .background(Color.primary.opacity(selected ? 0.07 : 0.045), in: RoundedRectangle(cornerRadius: 8))
+            .overlay(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 1)
+                    .fill(color.opacity(selected ? 1 : 0.45))
+                    .frame(width: 3)
+            }
+            .overlay(
+                RoundedRectangle(cornerRadius: 8).strokeBorder(
+                    selected ? color.opacity(0.55) : Color.clear, lineWidth: 1
+                )
+            )
         }
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onTap)
     }
 
     private func statusColor(_ status: String) -> Color {
@@ -223,33 +303,134 @@ struct TraceView: View {
         }
     }
 
-    // MARK: Prompt composition
+    // MARK: 侧栏详情
 
-    private func promptComposition(_ payload: TracePayload) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+    @ViewBuilder
+    private func stepDetails(_ payload: TracePayload, step: TraceStep) -> some View {
+        switch kind(step) {
+        case .prompt:
+            VStack(alignment: .leading, spacing: 14) {
+                sideHeader("组装提示词", color: kindColor(.prompt))
+                promptDocument(payload)
+                if !payload.messages.isEmpty {
+                    messageDocument(payload)
+                }
+            }
+        case .model:
+            VStack(alignment: .leading, spacing: 14) {
+                sideHeader("模型请求", color: kindColor(.model))
+                infoCard(rows: [
+                    ("模型", step.detail),
+                    ("耗时", "\(Int(step.durationMs)) ms"),
+                    ("回答字符", step.meta["回答字符"] ?? "-"),
+                    ("本次触发的工具", step.meta["工具调用"] ?? "0"),
+                ])
+                Text("请求里真正发送的提示词，点左侧「组装提示词」查看；这里只汇总产出。")
+                    .font(.caption).foregroundStyle(.tertiary)
+                if !payload.budget.isEmpty {
+                    Text(payload.budget.map { "\($0.key) \($0.value)" }.sorted().joined(separator: " · "))
+                        .font(.system(size: 10)).foregroundStyle(.tertiary)
+                }
+            }
+        case .tool:
+            VStack(alignment: .leading, spacing: 14) {
+                sideHeader("工具调用", color: kindColor(.tool))
+                let name = step.name.replacingOccurrences(of: "工具 · ", with: "")
+                let call = payload.toolCalls.last { $0.name == name }
+                if let call {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(call.name).font(.system(size: 11, weight: .medium, design: .monospaced))
+                        if !call.arguments.isEmpty {
+                            Text("参数 \(call.arguments)")
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundStyle(.secondary).lineLimit(4).textSelection(.enabled)
+                        }
+                        if !call.resultPreview.isEmpty {
+                            Text("结果 \(call.resultPreview)")
+                                .font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(6).textSelection(.enabled)
+                        }
+                    }
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 8))
+                } else {
+                    Text("没有对应的调用记录").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        case .summary:
+            VStack(alignment: .leading, spacing: 14) {
+                sideHeader("压缩摘要", color: kindColor(.summary))
+                infoCard(rows: [
+                    ("触发", step.meta["丢弃"] != nil ? "\(step.meta["丢弃"]!) 条消息超出预算" : "-"),
+                    ("耗时", "\(Int(step.durationMs)) ms"),
+                ])
+                Text("被压缩的消息不再进窗口；压缩结果写进 sessions.summary，下一轮作为「更早的对话（摘要）」注入。")
+                    .font(.caption).foregroundStyle(.tertiary)
+                if let payloadSummary = payload.systemSections.first(where: { $0.source == "sessions.summary" }) {
+                    sectionText(payloadSummary.text).padding(10)
+                        .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 8))
+                }
+            }
+        case .context:
+            VStack(alignment: .leading, spacing: 14) {
+                sideHeader("载入历史", color: kindColor(.context))
+                infoCard(rows: [
+                    ("加载条数", step.detail),
+                    ("已压缩到", step.meta["已压缩到"] ?? "0"),
+                    ("模型", step.meta["模型"] ?? "-"),
+                ])
+                Text("只加载最近 200 条（recentMessages 分页）；更早的靠「加载更早的消息」按钮或摘要进入提示词。")
+                    .font(.caption).foregroundStyle(.tertiary)
+            }
+        }
+    }
+
+    private func sideHeader(_ title: String, color: Color) -> some View {
+        HStack(spacing: 8) {
+            RoundedRectangle(cornerRadius: 2).fill(color).frame(width: 4, height: 14)
+            Text(title).font(.system(size: 13, weight: .semibold))
+        }
+    }
+
+    private func infoCard(rows: [(String, String)]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(Array(rows.enumerated()), id: \.offset) { _, pair in
+                self.row(pair.0, pair.1)
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    // MARK: Prompt document
+
+    /// The final system prompt as one document. Every block is clickable and expands into
+    /// a provenance card: where it came from and which rule produced it.
+    private func promptDocument(_ payload: TracePayload) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("提示词构成（system，每段怎么来的）")
+                Text("最终发给模型的提示词（system 完整原文，按注入顺序）")
                     .font(.system(size: 12, weight: .semibold))
                 Spacer()
                 Text("共 \(payload.systemSections.count) 段 · \(payload.systemSections.reduce(0) { $0 + $1.text.count }) 字")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            ForEach(Array(payload.systemSections.enumerated()), id: \.offset) { _, section in
-                DisclosureGroup {
-                    sectionText(section.text)
-                        .padding(8)
-                } label: {
-                    HStack(spacing: 8) {
-                        sourceBadge(section.source)
-                        Text(section.title).font(.system(size: 11, weight: .medium))
-                        Text("\(section.text.count) 字").font(.system(size: 10)).foregroundStyle(.secondary)
-                        Spacer()
-                    }
-                    .contentShape(Rectangle())
+            ForEach(Array(payload.systemSections.enumerated()), id: \.offset) { offset, section in
+                let sid = section.id.isEmpty ? "S\(offset + 1)" : section.id
+                let block = TraceSection(
+                    id: sid, title: section.title, source: section.source,
+                    origin: section.origin, rule: section.rule, text: section.text
+                )
+                sectionBlock(block)
+                if block.id == selectedSectionID {
+                    provenanceCard(
+                        source: section.source,
+                        origin: section.origin.isEmpty ? "（旧轨迹未记录）" : section.origin,
+                        rule: section.rule.isEmpty ? "（旧轨迹未记录）" : section.rule,
+                        extra: "字数 \(section.text.count)"
+                    )
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 8))
             }
             if !payload.budget.isEmpty {
                 Text(payload.budget.map { "\($0.key) \($0.value)" }.sorted().joined(separator: " · "))
@@ -259,6 +440,62 @@ struct TraceView: View {
         }
     }
 
+    private func sectionBlock(_ section: TraceSection) -> some View {
+        let selected = section.id == selectedSectionID
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Text(section.id)
+                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(Color.accentColor.opacity(0.16), in: Capsule())
+                    .foregroundStyle(Color.accentColor)
+                Text(section.title).font(.system(size: 11, weight: .medium))
+                sourceBadge(section.source)
+                Text("\(section.text.count) 字").font(.system(size: 10)).foregroundStyle(.secondary)
+                Spacer()
+                Image(systemName: selected ? "chevron.up.circle.fill" : "info.circle")
+                    .font(.system(size: 11))
+                    .foregroundStyle(selected ? Color.accentColor : Color.secondary)
+            }
+            sectionText(section.text)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            selected ? Color.accentColor.opacity(0.08) : Color.primary.opacity(0.045),
+            in: RoundedRectangle(cornerRadius: 8)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8).strokeBorder(
+                selected ? Color.accentColor.opacity(0.6) : Color.clear, lineWidth: 1
+            )
+        )
+        .contentShape(Rectangle())
+        .onTapGesture {
+            selectedSectionID = selected ? nil : section.id
+            selectedMessageID = nil
+        }
+    }
+
+    /// The provenance card: origin + rule for one block.
+    private func provenanceCard(source: String, origin: String, rule: String, extra: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Label("这块从哪里来", systemImage: "arrow.turn.up.left")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(Color.accentColor)
+            row("类型", source)
+            row("来源", origin)
+            row("规则", rule)
+            row("规模", extra)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.orange.opacity(0.07), in: RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8).strokeBorder(Color.orange.opacity(0.35), lineWidth: 1)
+        )
+    }
+
     private func sourceBadge(_ source: String) -> some View {
         Text(source)
             .font(.system(size: 9, design: .monospaced))
@@ -266,40 +503,6 @@ struct TraceView: View {
             .padding(.vertical, 2)
             .background(Color.secondary.opacity(0.15), in: Capsule())
             .foregroundStyle(.secondary)
-    }
-
-    // MARK: Message sequence
-
-    private func messageSequence(_ payload: TracePayload) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("发送的消息序列（裁剪后）").font(.system(size: 12, weight: .semibold))
-            ForEach(Array(payload.messages.enumerated()), id: \.offset) { index, message in
-                DisclosureGroup {
-                    sectionText(message.text)
-                        .padding(8)
-                } label: {
-                    HStack(spacing: 8) {
-                        roleBadge(message.role)
-                        if let name = message.name, !name.isEmpty {
-                            Text(name).font(.system(size: 10)).foregroundStyle(.secondary)
-                        }
-                        if let seq = message.seq {
-                            Text("seq \(seq)").font(.system(size: 9)).foregroundStyle(.tertiary)
-                        }
-                        Text("#\(index)").font(.system(size: 9)).foregroundStyle(.tertiary)
-                        Text("\(message.chars) 字").font(.system(size: 10)).foregroundStyle(.secondary)
-                        if message.truncated {
-                            Text("已截断").font(.system(size: 9)).foregroundStyle(.orange)
-                        }
-                        Spacer()
-                    }
-                    .contentShape(Rectangle())
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 8))
-            }
-        }
     }
 
     private func roleBadge(_ role: String) -> some View {
@@ -313,10 +516,99 @@ struct TraceView: View {
 
     private func roleColor(_ role: String) -> Color {
         switch role {
-        case "user": .blue
-        case "assistant": .green
-        case "tool": .orange
-        default: .secondary
+        case "user": Color.blue
+        case "assistant": Color.green
+        case "tool": Color.orange
+        default: Color.secondary
+        }
+    }
+
+    private func row(_ label: String, _ value: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text(label)
+                .font(.system(size: 10, weight: .semibold))
+                .frame(width: 32, alignment: .leading)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.system(size: 10.5))
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    // MARK: Message document
+
+    /// The message sequence kept by the trimmer. Clicking one shows where it lives and why
+    /// it survived the budget cut.
+    private func normalized(_ message: TraceMessage, index: Int) -> TraceMessage {
+        var message = message
+        if message.id.isEmpty { message.id = "M\(index + 1)" }
+        return message
+    }
+
+    private func messageDocument(_ payload: TracePayload) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("发送的消息序列（裁剪后，按发送顺序）")
+                    .font(.system(size: 12, weight: .semibold))
+                Spacer()
+                Text("共 \(payload.messages.count) 条")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            ForEach(Array(payload.messages.enumerated()), id: \.offset) { offset, messageIn in
+                let message = normalized(messageIn, index: offset)
+                messageBlock(message)
+                if message.id == selectedMessageID {
+                    provenanceCard(
+                        source: message.role,
+                        origin: message.origin.isEmpty ? "messages 表" : message.origin,
+                        rule: message.rule.isEmpty ? "TranscriptBuilder.trim：预算裁剪 + 头部修复" : message.rule,
+                        extra: "\(message.chars) 字\(message.truncated ? " · 展示已截断" : "")"
+                    )
+                }
+            }
+        }
+    }
+
+    private func messageBlock(_ message: TraceMessage) -> some View {
+        let selected = message.id == selectedMessageID
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Text(message.id)
+                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(Color.secondary.opacity(0.15), in: Capsule())
+                    .foregroundStyle(.secondary)
+                roleBadge(message.role)
+                if let name = message.name, !name.isEmpty {
+                    Text(name).font(.system(size: 10)).foregroundStyle(.secondary)
+                }
+                if let seq = message.seq {
+                    Text("seq \(seq)").font(.system(size: 9)).foregroundStyle(.tertiary)
+                }
+                Text("\(message.chars) 字").font(.system(size: 10)).foregroundStyle(.secondary)
+                if message.truncated {
+                    Text("已截断").font(.system(size: 9)).foregroundStyle(.orange)
+                }
+                Spacer()
+            }
+            sectionText(message.text).lineLimit(6)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            selected ? Color.accentColor.opacity(0.08) : Color.primary.opacity(0.045),
+            in: RoundedRectangle(cornerRadius: 8)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8).strokeBorder(
+                selected ? Color.accentColor.opacity(0.6) : Color.clear, lineWidth: 1
+            )
+        )
+        .contentShape(Rectangle())
+        .onTapGesture {
+            selectedMessageID = selected ? nil : message.id
+            selectedSectionID = nil
         }
     }
 
@@ -370,11 +662,12 @@ struct TraceView: View {
 
     // MARK: Data
 
-    private func reload() async {
+    private func reload(selectLatest: Bool = false) async {
         loading = true
         traces = await store.loadTraces()
         loading = false
-        if selectedID == nil {
+        let currentExists = traces.contains { $0.id == selectedID }
+        if selectLatest || selectedID == nil || !currentExists {
             selectedID = traces.first?.id
             if let id = selectedID { await load(id: id) }
         }

@@ -257,21 +257,26 @@ public actor MemoryStore {
         )
     }
 
-    public func traceSummaries(in sessionID: String, limit: Int = 30) throws -> [TraceSummary] {
+    public func traceSummaries(limit: Int = 50) throws -> [TraceSummary] {
         try rows(
             """
-            SELECT id, created_at, model, route, duration_ms, prompt_chars
-            FROM turn_traces WHERE session_id = ? ORDER BY created_at DESC LIMIT ?
+            SELECT t.id, t.session_id, COALESCE(s.title, ''), t.created_at, t.model,
+                   t.route, t.duration_ms, t.prompt_chars
+            FROM turn_traces t
+            LEFT JOIN sessions s ON s.id = t.session_id
+            ORDER BY t.created_at DESC LIMIT ?
             """,
-            [.text(sessionID), .int(limit)]
+            [.int(limit)]
         ) { statement in
             TraceSummary(
                 id: statement.text(0),
-                createdAt: Date(timeIntervalSince1970: statement.double(1)),
-                model: statement.text(2),
-                route: statement.text(3),
-                durationMs: statement.double(4),
-                promptChars: statement.int(5)
+                sessionID: statement.text(1),
+                sessionTitle: statement.text(2),
+                createdAt: Date(timeIntervalSince1970: statement.double(3)),
+                model: statement.text(4),
+                route: statement.text(5),
+                durationMs: statement.double(6),
+                promptChars: statement.int(7)
             )
         }
     }
